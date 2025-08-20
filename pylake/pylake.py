@@ -407,7 +407,7 @@ def mixed_layer(Temp, depth=None, s=0.2, threshold=0.01):
     ...    print(hML)
     '''
     Temp, depth = to_xarray(Temp, depth)
-    rho = dens1(S=s,T=Temp)
+    rho = dens0(s=s,t=Temp)
 
     rho_surf = rho.isel(depth=0)
 
@@ -770,7 +770,7 @@ def buoyancy_freq(Temp, depth=None, g=9.81):
     
     Returns
     ----------
-    n2: xarray with buoyancy frequency in units \code{sec^-2} and associated average lake depths (can be different from input depths).
+    n2: xarray with buoyancy frequency in units {sec^-2} and associated average lake depths (can be different from input depths).
     
     Example
     ----------
@@ -875,3 +875,72 @@ def Monin_Obukhov(ustar, JB0):
     '''
     LMO = ustar**3/0.4/JB0
     return LMO
+
+def oxygen_solubility(T, saturation=100):
+    """
+    Oxygen solubility in freshwater (mg/L) according to Benson & Krause (1984),
+    without salinity effect (suitable for lakes).
+
+    Parameters
+    ----------
+    T : float or np.ndarray
+        Temperature in °C
+    saturation : float or np.ndarray, optional
+        Oxygen saturation in percent. Default is 100 for full saturation.
+
+    Returns
+    -------
+    O2 : float or np.ndarray
+        Oxygen concentration in mg/L corresponding to the given saturation.
+        If saturation=100, this is the solubility at equilibrium with air.
+    """
+    T_K = T + 273.15
+    # Benson & Krause formula (logarithm of solubility)
+    ln_O2 = (-139.34411 + 1.575701e5/T_K
+             - 6.642308e7/T_K**2
+             + 1.243800e10/T_K**3
+             - 8.621949e11/T_K**4)
+    
+    O2_100 = np.exp(ln_O2)  # mg/L at 100% saturation
+
+    # Scale by percent saturation
+    O2_actual = O2_100 * saturation / 100.0
+    
+    return O2_actual
+
+def pressure_correction_to_DO(T, altitude):
+    """
+    Correct oxygen saturation for altitude/pressure effects.
+    
+    Parameters
+    ----------
+    T : float or array
+        Temperature in °C
+    altitude : float
+        Altitude above sea level in meters
+    
+    Returns
+    -------
+    press_corr : float or array
+        Pressure correction factor (multiply O2 saturation at sea level by this)
+    """
+    mmHg_mb = 0.750061683
+    mmHg_inHg = 25.3970886
+    standard_pressure_sea_level = 29.92126  # inHg
+    standard_temperature_sea_level = 15 + 273.15  # K
+    g = 9.80665  # m/s² (fixed standard gravity)
+    air_molar_mass = 0.0289644
+    universal_gas_constant = 8.31447
+
+    # barometric pressure at altitude (in inHg)
+    baro = (1. / mmHg_mb) * mmHg_inHg * standard_pressure_sea_level * np.exp(
+        (-g * air_molar_mass * altitude) /
+        (universal_gas_constant * standard_temperature_sea_level)
+    )
+    
+    # water vapor pressure (mmHg) using Antoine equation
+    u = 10 ** (8.10765 - 1750.286 / (235 + T))
+    
+    # correction factor
+    press_corr = (baro * mmHg_mb - u) / (760 - u)
+    return press_corr
