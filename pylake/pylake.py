@@ -908,7 +908,7 @@ def oxygen_solubility(T, saturation=100):
     
     return O2_actual
 
-def pressure_correction_to_DO(T, altitude):
+def altitude_correction(T, altitude):
     """
     Correct oxygen saturation for altitude/pressure effects.
     
