@@ -1,6 +1,7 @@
 import numpy as np
 from .functions import *
-import seawater as sw
+import seawater as sw # Deprecated
+import gsw # Replacement for sw
 from scipy.interpolate import interp1d
 import warnings
 from scipy.signal import find_peaks,savgol_filter
@@ -944,3 +945,46 @@ def altitude_correction(T, altitude):
     # correction factor
     press_corr = (baro * mmHg_mb - u) / (760 - u)
     return press_corr
+
+
+def calculate_depth(press,rho,lat=45,air_press=0,integrate="down"):
+    """
+    Calculates the depth of measurements from pressure and density data.
+    
+    Parameters
+    ----------
+    press : float or array
+        Pressure (dbar)
+    rho: float or array (same dimension as press)
+        Water density, independent of pressure (kg/m3)
+    lat: float
+        Latitude (°) to compute the gravitational acceleration
+    air_press: float
+        Atmospheric pressure (dbar)
+    integrate : string
+        Density-integration option:
+            "down": integrates density values measured before the pressure value
+            "up": integrates density values measured after the pressure value
+            "None": uses density value measured at the same time as pressure
+    
+    Returns
+    -------
+    depth : float or array (same dimension as press)
+        Depth (m) 
+    """
+    indrho=np.full(len(rho),1.0)
+    indrho[np.isnan(rho)]=np.nan
+    if integrate=="down": 
+        # computes the cumulative average density for each pressure value
+        rho_avg=np.nancumsum(rho)/np.nancumsum(indrho) 
+    elif integrate=="up":
+        # computes the reversed cumulative average density for each pressure value
+        rho_avg=np.nancumsum(rho[::-1])/np.nancumsum(indrho[::-1])
+        rho_avg=rho_avg[::-1]
+    else:
+        # uses the instantaneous density
+        rho_avg=np.copy(rho)
+        
+    depth = 1e4 * (press-air_press) / (rho_avg*gsw.grav(lat,0)) # [m]
+
+    return depth
