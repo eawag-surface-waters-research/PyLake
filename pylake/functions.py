@@ -138,25 +138,6 @@ def check_bathy(Temp, bthA, bthD, depth):
         depth = np.append(np.min(bthD), depth)
     return Temp,bthA,bthD,depth
 
-def T68conv(T90):
-    return T90 * 1.00024
-
-def dens0(t,s=0.2):
-    b = (8.24493e-1, -4.0899e-3, 7.6438e-5, -8.2467e-7, 5.3875e-9)
-    c = (-5.72466e-3, 1.0227e-4, -1.6546e-6)
-    d = 4.8314e-4
-    T68 = T68conv(t)
-    out =  (smow(t) + (b[0] + (b[1] + (b[2] + (b[3] + b[4] * T68) * T68) *
-            T68) * T68) * s + (c[0] + (c[1] + c[2] * T68) * T68) * s *
-            s ** 0.5 + d * s ** 2)
-    return out
-
-def smow(t):
-    a = (999.842594, 6.793952e-2, -9.095290e-3, 1.001685e-4, -1.120083e-6, 6.536332e-9)
-    T68 = T68conv(t)
-    out= (a[0] + (a[1] + (a[2] + (a[3] + (a[4] + a[5] * T68) * T68) * T68) * T68) * T68)
-    return out    
-
 def format_Temp(depths, Temp):
     if Temp.ndim==2:
         if Temp.shape[0]==depths.shape[0]:

@@ -1,6 +1,6 @@
 import numpy as np
 from .functions import *
-import seawater as sw
+import gsw
 from scipy.interpolate import interp1d
 import warnings
 from scipy.signal import find_peaks,savgol_filter
@@ -64,7 +64,7 @@ def thermocline(Temp, depth=None, time=None, s=0.2, mixed_cutoff=1, smooth=False
         Temp = smooth_temp(Temp, depth, smooth)
         Temp, depth = to_xarray(Temp, depth,time)
 
-    rhoVar = dens0(s=s,t=Temp)
+    rhoVar = water_density(Temp,s)
     drho_dz = rhoVar.diff('depth')/rhoVar.depth.diff('depth')
     inf_mask = np.isinf(drho_dz)
     drho_dz = drho_dz.where(~inf_mask, np.nan)
@@ -147,7 +147,7 @@ def seasonal_thermocline(Temp, depth=None, time=None, s=0.2, mixed_cutoff=1, Smi
     is_not_significant = (Temp.max('depth') - Temp.min('depth')) < mixed_cutoff
 
     time = Temp.time
-    rhoVar = dens0(s=s,t=Temp)
+    rhoVar = water_density(Temp,s)
     drho_dz = rhoVar.diff('depth')/rhoVar.depth.diff('depth')
 
     # It seems that this is not used...
@@ -338,7 +338,7 @@ def metalimnion(Temp, depth=None, slope=0.25, slope_calc="relative", seasonal=Fa
     Temp["thermoInd"] = thermoInd
     Temp["thermoD"] = thermoD
 
-    rhoVar = dens0(s=s,t=Temp)
+    rhoVar = water_density(Temp,s)
     drho_dz = rhoVar.diff('depth')/rhoVar.depth.diff('depth')
     drho_dz["depth"] = [(a+b)/2 for a,b in zip(depth, depth[1:])]
 
@@ -407,7 +407,7 @@ def mixed_layer(Temp, depth=None, s=0.2, threshold=0.01):
     ...    print(hML)
     '''
     Temp, depth = to_xarray(Temp, depth)
-    rho = dens0(s=s,t=Temp)
+    rho = water_density(Temp,s)
 
     rho_surf = rho.isel(depth=0)
 
@@ -561,7 +561,7 @@ def schmidt_stability(Temp, depth=None, time=None, bthA=None, bthD=None, sal = 0
     z0 = np.min(depth)
     I0 = np.argmin(depth)
     A0 = bthA[I0]
-    rhoL = dens0(t=Temp,s=sal)
+    rhoL = water_density(Temp,sal)
     
     layerD = np.arange(z0, np.max(depth),dz)
     layerP = rhoL.interp(depth=layerD)
@@ -619,7 +619,7 @@ def heat_content(Temp, bthA, bthD, depth=None, s=0.2):
     if Ao==0:
         print("surface area cannot be zero, check bathymetric file")
     
-    rhoL = dens0(s=s,t=Temp)
+    rhoL = water_density(Temp,s)
     layerD = np.arange(Zo, np.max(depth),dz)
     layerP = rhoL.interp(depth=layerD)
     layerT = Temp.interp(depth=layerD)
@@ -786,7 +786,7 @@ def buoyancy_freq(Temp, depth=None, g=9.81):
         2.31752785e-04, 1.00430572e-04])
     '''
     Temp, depth = to_xarray(Temp,depth)
-    rho = dens0(s=0.2, t=Temp)
+    rho = water_density(Temp, 0.2)
     numdepth = len(depth)
     rho_2 = rho.isel(depth=slice(0,numdepth-1))
     drho_dz = rho.diff('depth')/Temp.depth.diff('depth')
@@ -859,7 +859,7 @@ def Surface_Buoyancy_Flux(swT,sHFturb0,rho0):
     JB0: array_like
         Surface buoyancy flux W/m2
     '''
-    JB0 = sw.alpha(0.2,swT,0)*9.81/sw.cp(0.2,swT,0)*sHFturb0/rho0
+    JB0 = alpha(swT)*9.81/cp(swT)*sHFturb0/rho0
     return JB0
 
 def Monin_Obukhov(ustar, JB0):
@@ -944,3 +944,111 @@ def altitude_correction(T, altitude):
     # correction factor
     press_corr = (baro * mmHg_mb - u) / (760 - u)
     return press_corr
+
+
+def calculate_depth(press,rho,lat=45,air_press=0,integrate="down"):
+    """
+    Calculates the depth of measurements from pressure and density data.
+    
+    Parameters
+    ----------
+    press : float or array
+        Pressure (dbar)
+    rho: float or array (same dimension as press)
+        Water density, independent of pressure (kg/m3)
+    lat: float
+        Latitude (°) to compute the gravitational acceleration
+    air_press: float
+        Atmospheric pressure (dbar)
+    integrate : string
+        Density-integration option:
+            "down": integrates density values measured before the pressure value
+            "up": integrates density values measured after the pressure value
+            "None": uses density value measured at the same time as pressure
+    
+    Returns
+    -------
+    depth : float or array (same dimension as press)
+        Depth (m) 
+    """
+    indrho=np.full(len(rho),1.0)
+    indrho[np.isnan(rho)]=np.nan
+    if integrate=="down": 
+        # computes the cumulative average density for each pressure value
+        rho_avg=np.nancumsum(rho)/np.nancumsum(indrho) 
+    elif integrate=="up":
+        # computes the reversed cumulative average density for each pressure value
+        rho_avg=np.nancumsum(rho[::-1])/np.nancumsum(indrho[::-1])
+        rho_avg=rho_avg[::-1]
+    else:
+        # uses the instantaneous density
+        rho_avg=np.copy(rho)
+        
+    depth = 1e4 * (press-air_press) / (rho_avg*gsw.grav(lat,0)) # [m]
+
+    return depth
+
+def water_density(T,S=0.2):
+    """
+    Calculates lake water density rho as a function of water temperature and salinity (ignoring pressure effects, i.e. at sea level pressure)
+    According to Chen and Millero (1986)
+    
+    Parameters
+    ----------
+    T : float or array
+        Temperature in °C
+    S: float or array, default: 0.2
+        Salinity in Practical Salinity Scale units
+    
+    Returns
+    -------
+    density : float or array (same dimension as T and S)
+        lake water density (kg m-3) 
+    """    
+
+    density = 1e3 * (
+                    0.9998395 + 6.7914e-5 * T - 9.0894e-6 * T ** 2 + 1.0171e-7 * T ** 3 -
+                    1.2846e-9 * T ** 4 + 1.1592e-11 * T ** 5 - 5.0125e-14 * T ** 6 + (
+                        8.181e-4 - 3.85e-6 * T + 4.96e-8 * T ** 2) * S)
+
+    return density
+
+def cp(T):
+    """
+    Calculates the isobaric specific heat coefficient cp as a function of water temperature (ignoring salinity and pressure effects, i.e. at zero salinity and sea level pressure)
+    According to Chen and Millero (1986)
+    
+    Parameters
+    ----------
+    T : float or array
+        Temperature in °C
+    
+    Returns
+    -------
+    cp : float or array (same dimension as T)
+        specific heat coefficient (J kg-1 K-1) 
+    """    
+
+    cp = (4.2174 - 3.6608e-3*T + 1.3129e-4*T**2 - 2.210e-6*T**3 + 1.508e-8*T**4)*1e3
+
+    return cp
+
+def alpha(T):
+    """
+    Calculates the thermal expansion coefficient alpha as a function of water temperature (ignoring salinity and pressure effects, i.e. at zero salinity and sea level pressure)
+    According to Chen and Millero (1986)
+    
+    Parameters
+    ----------
+    T : float or array
+        Temperature in °C
+    
+    Returns
+    -------
+    alpha : float or array (same dimension as T)
+        thermal expansion coefficient (K-1) 
+    """    
+
+    alpha = (-68.00 + 18.2091*T - 0.30866*T**2 + 5.3445e-3*T**3 - 6.0721e-5*T**4 + 3.1441e-7*T**5)*1e-6
+
+    return alpha
