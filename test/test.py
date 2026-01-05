@@ -1,6 +1,5 @@
 import pylake
 import numpy as np
-import seawater as sw
 
 Temp = np.array([14.3,14,12.1,10,9.7,9.5,6,5])
 depth = np.array([1,2,3,4,5,6,7,8])
@@ -11,9 +10,9 @@ SthermoD, SthermoInd = pylake.seasonal_thermocline(Temp,depth)
 hML = pylake.mixed_layer(Temp,depth, threshold=0.4)
 n2 = pylake.buoyancy_freq(Temp, depth, g=9.81)
 avg_ep_T = pylake.Average_layer_temp(Temp, depth=depth, depth_ref=epilimnion, layer='top')
-avg_ep_rho = sw.dens0(s=0.2,t=avg_ep_T)
+avg_ep_rho = pylake.water_density(avg_ep_T)
 avg_hyp_T = pylake.Average_layer_temp(Temp, depth=depth, depth_ref=hypolimnion, layer='bot')
-avg_hyp_rho = sw.dens0(s=0.2,t=avg_hyp_T)
+avg_hyp_rho = pylake.water_density(avg_hyp_T)
 delta_rho = avg_hyp_rho-avg_ep_rho
 
 bthA = np.array([100,90,86,82,20,1])
