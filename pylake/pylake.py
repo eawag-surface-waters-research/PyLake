@@ -573,6 +573,8 @@ def schmidt_stability(Temp, depth=None, time=None, bthA=None, bthD=None, sal = 0
     Zcv = (layers["D"]@layers["A"])/layers["A"].sum()
     right_side = ((layers["D"]-Zcv) * layers["A"]) * dz * g / A0
     St = layers["P"]@right_side
+    if St.size == 1:
+        St = St.values.item()
     return St 
 
 def heat_content(Temp, bthA, bthD, depth=None, s=0.2):
@@ -631,6 +633,8 @@ def heat_content(Temp, bthA, bthD, depth=None, s=0.2):
     u_i = layerT*m_i*cw
 
     U = u_i.sum('depth')/layerA[0]
+    if U.size == 1:
+        U = U.values.item()
     return U 
 
 
