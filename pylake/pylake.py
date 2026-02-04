@@ -912,42 +912,61 @@ def oxygen_solubility(T, saturation=100):
     
     return O2_actual
 
-def altitude_correction(T, altitude):
+def barometric_pressure(altitude_m):
     """
-    Correct oxygen saturation for altitude/pressure effects.
-    
+    Compute air pressure at altitude assuming isothermal atmosphere.
+
     Parameters
     ----------
-    T : float or array
-        Temperature in °C
-    altitude : float
-        Altitude above sea level in meters
-    
+    altitude_m : float
+        Altitude above sea level [m]
+
     Returns
     -------
-    press_corr : float or array
-        Pressure correction factor (multiply O2 saturation at sea level by this)
+    float
+        Air pressure [Pa]
     """
-    mmHg_mb = 0.750061683
-    mmHg_inHg = 25.3970886
-    standard_pressure_sea_level = 29.92126  # inHg
-    standard_temperature_sea_level = 15 + 273.15  # K
-    g = 9.80665  # m/s² (fixed standard gravity)
-    air_molar_mass = 0.0289644
-    universal_gas_constant = 8.31447
 
-    # barometric pressure at altitude (in inHg)
-    baro = (1. / mmHg_mb) * mmHg_inHg * standard_pressure_sea_level * np.exp(
-        (-g * air_molar_mass * altitude) /
-        (universal_gas_constant * standard_temperature_sea_level)
-    )
-    
-    # water vapor pressure (mmHg) using Antoine equation
-    u = 10 ** (8.10765 - 1750.286 / (235 + T))
-    
-    # correction factor
-    press_corr = (baro * mmHg_mb - u) / (760 - u)
-    return press_corr
+    P0 = 101325.0              # Pa, standard sea-level pressure
+    T0 = 288.15                # K, standard temperature (15 °C)
+    g = 9.80665                # m/s², standard gravity
+    M = 0.0289644              # kg/mol, molar mass of dry air
+    R = 8.31447                # J/(mol·K), universal gas constant
+
+    return P0 * np.exp(-g * M * altitude_m / (R * T0))
+
+def water_vapor_pressure(T_C):
+    """
+    Water vapor pressure using Antoine equation.
+
+    Parameters
+    ----------
+    T_C : float
+        Temperature [°C]
+
+    Returns
+    -------
+    float
+        Vapor pressure [Pa]
+    """
+    p_mmHg = 10 ** (8.10765 - 1750.286 / (235 + T_C))
+    return p_mmHg * 133.322  # mmHg → Pa
+
+def altitude_correction(altitude_m, T_C=15):
+    """
+    Altitude correction factor accounting for altitude and water vapor.
+
+    Returns
+    -------
+    float
+        Dimensionless correction factor
+    """
+
+    P0 = 101325.0              # Pa, standard sea-level pressure
+    p_air = barometric_pressure(altitude_m)
+    p_vapor = water_vapor_pressure(T_C)
+
+    return (p_air - p_vapor) / (P0 - p_vapor)
 
 
 def calculate_depth(press,rho,lat=45,air_press=0,integrate="down"):
