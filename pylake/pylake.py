@@ -565,31 +565,48 @@ def mixed_layer(Temp, depth=None, s=0.2, threshold=0.01):
     ...    print(hML)
     '''
     Temp, depth = to_xarray(Temp, depth)
-    rho = water_density(Temp,s)
+    rho = water_density(Temp, s)
 
     rho_surf = rho.isel(depth=0)
 
-    #If surface sensor is NaN, check the second (could potentially be iterated further down)
-    NaN = np.where(np.isnan(rho_surf))[0]
-    rho_surf[NaN] = rho.isel(time=NaN, depth=1)
-    
-    rho_diff = rho.T - rho_surf - threshold
+    if rho.sizes["depth"] > 1:
+        rho_surf = rho_surf.where(
+            rho_surf.notnull(),
+            rho.isel(depth=1),
+        )
 
-    # Set rho diff to 999 if not larger than a certain threshold
-    rho_diff_filled = rho_diff.where(rho_diff > 0, other=999)
+    rho_diff = (
+        rho
+        - rho_surf
+        - threshold
+    )
 
-    # Find the index of the minimum value along the depth dimension (= depth first exceeds the threshold)
-    hML_idx = rho_diff_filled.argmin('depth')
+    rho_diff_filled = rho_diff.where(
+        rho_diff > 0,
+        other=999,
+    )
 
-    # Set mixing depth to deepest depth if no valid density difference is discovered
-    for i in range(len(rho_diff_filled.isel(depth=hML_idx).values)):
-        if (rho_diff_filled.isel(depth=hML_idx).values[i] == 999):
-            hML_idx[i] = len(rho.depth) - 1
+    hML_idx = rho_diff_filled.argmin(
+        "depth"
+    )
 
-    # Get the depth corresponding to hML_idx
-    hML = rho.depth.isel(depth=hML_idx)
+    selected = rho_diff_filled.isel(
+        depth=hML_idx
+    )
+
+    hML_idx = xr.where(
+        selected == 999,
+        rho.sizes["depth"] - 1,
+        hML_idx,
+    ).astype(int)
+
+    hML = rho["depth"].isel(
+        depth=hML_idx
+    )
+
     if hML.size == 1:
-            hML = hML.values.item()
+        return hML.values.item()
+
     return hML
 
 def wedderburn(delta_rho, metaT, uSt, AvHyp_rho, Lo=False, Ao=False, g=9.81):
