@@ -131,49 +131,28 @@ def smooth_temp(Temp, depths, smooth):
 
 
 def weighted_method(depths, rho, z_idx):
-    '''
-    Estimate where the thermocline lies even between two temperature
-    measurement depths, giving a potentially finer-scale estimate
-    than usual techniques.
+    """
+    Refine thermocline depth between measurement depths.
 
     Parameters
-    -----------
-    depths: array_like
-        depth array
-    drho_dz: array_like
-        density array
-    z_idx: array_like
-        thermocline index corresponding to the depths
+    ----------
+    depths : array_like
+        Depth array.
+    rho : xarray.DataArray
+        Water density with a depth dimension.
+    z_idx : xarray.DataArray
+        Index of the maximum density gradient.
 
     Returns
-    -----------
-    weighted_thermoD: array_like
-        the adjusted weighted thermocline depth.
-    '''
+    -------
+    weighted_thermoD : xarray.DataArray
+        Refined thermocline depth.
+    """
 
-    if type(rho) == np.ndarray:
-        depths, rho, z_idx = list(
-            map(
-                np.asanyarray,
-                (depths, rho, z_idx),
-            )
-        )
+    if not isinstance(rho, xr.DataArray):
+        raise TypeError("weighted_method expects rho to be an xarray.DataArray")
 
-        rho = format_Temp(depths, rho)
-
-        coords = {
-            "time": list(range(0, rho.shape[0])),
-            "depth": depths,
-        }
-
-        rho = xr.DataArray(
-            rho,
-            coords,
-        )
-
-    else:
-        depths = rho.depth
-        rho.load()
+    depths = rho["depth"]
 
     drho_dz = (
         rho.diff("depth")
@@ -226,27 +205,15 @@ def weighted_method(depths, rho, z_idx):
     )
 
     weighted_thermoD = (
-        depths[z_masked + 1]
-        * (
-            Dplus
-            / (Dminu + Dplus)
-        )
-        + depths[z_masked]
-        * (
-            Dminu
-            / (Dminu + Dplus)
-        )
+        depths.isel(depth=z_masked + 1)
+        * (Dplus / (Dminu + Dplus))
+        + depths.isel(depth=z_masked)
+        * (Dminu / (Dminu + Dplus))
     )
 
     mask_inf = (
-        np.isinf(
-            Dplus
-            / (Dminu + Dplus)
-        )
-        & np.isinf(
-            Dminu
-            / (Dminu + Dplus)
-        )
+        np.isinf(Dplus / (Dminu + Dplus))
+        & np.isinf(Dminu / (Dminu + Dplus))
     )
 
     weighted_thermoD = weighted_thermoD.where(
@@ -265,14 +232,11 @@ def weighted_method(depths, rho, z_idx):
     )
 
     try:
-        weighted_thermoD = weighted_thermoD.drop_vars(
-            "depth"
-        )
-    except:
+        weighted_thermoD = weighted_thermoD.drop_vars("depth")
+    except (ValueError, KeyError):
         pass
 
     return weighted_thermoD
-
 
 def check_bathy(Temp, bthA, bthD, depth):
     numD = Temp.shape[1] - 1
