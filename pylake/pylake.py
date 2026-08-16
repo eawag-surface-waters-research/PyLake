@@ -298,35 +298,84 @@ def robust_thermocline(Temp, depth=None, time=None, s=0.2, mixed_cutoff=1):
 
     Temp, depth = to_xarray(Temp, depth, time)
 
-    # Ensure Temp is (time, depth)
-    Temp = Temp.transpose('time', 'depth')
+    if control(Temp, depth) != 1:
+        return np.nan
 
-    # Compute significance
-    is_not_significant = Temp.max('depth') - Temp.min('depth') < mixed_cutoff
+    is_not_significant = (
+        Temp.max("depth") - Temp.min("depth") < mixed_cutoff
+    )
 
-    # Metalimnion boundaries
-    epi_depth, hypo_depth = metalimnion(Temp, depth, slope=0.5, slope_calc='relative',
-                                        seasonal=True, mixed_cutoff=mixed_cutoff, smooth=True, s=s)
+    epi_depth, hypo_depth = metalimnion(
+        Temp,
+        depth,
+        slope=0.5,
+        slope_calc="relative",
+        seasonal=True,
+        mixed_cutoff=mixed_cutoff,
+        smooth=True,
+        s=s,
+    )
 
-    # Force epi_depth and hypo_depth to 1D numpy arrays
-    epi_depth = np.atleast_1d(epi_depth)
-    hypo_depth = np.atleast_1d(hypo_depth)
+    def robust_profile(temp_profile, depth_values, epi, hypo):
+        epi_temp = np.interp(
+            epi,
+            depth_values,
+            temp_profile,
+        )
 
-    # Initialize output
-    thermoD = np.full(epi_depth.shape[0], np.nan)
+        hypo_temp = np.interp(
+            hypo,
+            depth_values,
+            temp_profile,
+        )
 
-    for i in range(epi_depth.shape[0]):
-        temp_profile = Temp.values[i, :]  # (depths)
-        epi_temp = np.interp(epi_depth[i], depth, temp_profile)
-        hypo_temp = np.interp(hypo_depth[i], depth, temp_profile)
-        meta_temp = (epi_temp + hypo_temp) / 2
-        thermoD[i] = np.interp(-meta_temp, -temp_profile, depth)
+        meta_temp = (
+            epi_temp + hypo_temp
+        ) / 2
 
-    # Apply significance mask
-    thermoD = np.where(~is_not_significant.values, thermoD, np.nan)
+        return np.interp(
+            -meta_temp,
+            -temp_profile,
+            depth_values,
+        )
+
+    thermoD = xr.apply_ufunc(
+        robust_profile,
+        Temp,
+        Temp["depth"],
+        epi_depth,
+        hypo_depth,
+        input_core_dims=[
+            ["depth"],
+            ["depth"],
+            [],
+            [],
+        ],
+        output_core_dims=[[]],
+        vectorize=True,
+        output_dtypes=[float],
+    )
+
+    thermoD = thermoD.where(
+        ~is_not_significant,
+        np.nan,
+    )
+
+    internal_coords = [
+        name
+        for name in ("thermoInd", "thermoD")
+        if name in thermoD.coords
+    ]
+
+    if internal_coords:
+        thermoD = thermoD.reset_coords(
+            internal_coords,
+            drop=True,
+        )
 
     if thermoD.size == 1:
-        thermoD = thermoD[0]
+        return thermoD.values.item()
+
     return thermoD
 
 
@@ -456,6 +505,30 @@ def metalimnion(Temp, depth=None, slope=0.25, slope_calc="relative", seasonal=Fa
     hypo_depth_filt = hypo_depth.where(hypo_depth>hypo_depth["thermoD"],hypo_depth["thermoD"])
     epi_depth_filt = epi_depth.where(epi_depth<epi_depth["thermoD"],epi_depth["thermoD"])
     
+    epi_internal_coords = [
+        name
+        for name in ("thermoInd", "thermoD")
+        if name in epi_depth_filt.coords
+    ]
+
+    if epi_internal_coords:
+        epi_depth_filt = epi_depth_filt.reset_coords(
+            epi_internal_coords,
+            drop=True,
+        )
+
+    hypo_internal_coords = [
+        name
+        for name in ("thermoInd", "thermoD")
+        if name in hypo_depth_filt.coords
+    ]
+
+    if hypo_internal_coords:
+        hypo_depth_filt = hypo_depth_filt.reset_coords(
+            hypo_internal_coords,
+            drop=True,
+        )
+
     if epi_depth_filt.size==1:
         epi_depth_filt = epi_depth_filt.values.item()
         hypo_depth_filt = hypo_depth_filt.values.item()
