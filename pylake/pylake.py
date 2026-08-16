@@ -731,25 +731,70 @@ def schmidt_stability(Temp, depth=None, time=None, bthA=None, bthD=None, sal = 0
 
     '''
     Temp, depth = to_xarray(Temp, depth, time)
-    Temp  = Temp.interpolate_na(dim='depth')
+    Temp = Temp.interpolate_na(dim="depth")
 
     z0 = np.min(depth)
     I0 = np.argmin(depth)
     A0 = bthA[I0]
-    rhoL = water_density(Temp,sal)
-    
-    layerD = np.arange(z0, np.max(depth),dz)
-    layerP = rhoL.interp(depth=layerD)
-    layers = layerP.copy()
-    layerA = np.interp(layerD, bthD, bthA)
-    layers["A"]=('depth', layerA)
-    layers["D"] = layers.depth
-    layers["P"] = layerP
-    Zcv = (layers["D"]@layers["A"])/layers["A"].sum()
-    right_side = ((layers["D"]-Zcv) * layers["A"]) * dz * g / A0
-    St = layers["P"]@right_side
+
+    rhoL = water_density(Temp, sal)
+
+    layerD = np.arange(
+        z0,
+        np.max(depth),
+        dz,
+    )
+
+    layerP = rhoL.interp(
+        depth=layerD
+    )
+
+    layerA = xr.DataArray(
+        np.interp(
+            layerD,
+            bthD,
+            bthA,
+        ),
+        dims=("depth",),
+        coords={"depth": layerD},
+    )
+
+    Zcv = (
+        (
+            layerP["depth"]
+            * layerA
+        ).sum(
+            "depth",
+            skipna=False,
+        )
+        / layerA.sum(
+            "depth",
+            skipna=False,
+        )
+    )
+
+    right_side = (
+        (
+            layerP["depth"]
+            - Zcv
+        )
+        * layerA
+        * dz
+        * g
+        / A0
+    )
+
+    St = (
+        layerP
+        * right_side
+    ).sum(
+        "depth",
+        skipna=False,
+    )
+
     if St.size == 1:
-        St = St.values.item()
+        return St.values.item()
+
     return St 
 
 def heat_content(Temp, bthA, bthD, depth=None, s=0.2):
