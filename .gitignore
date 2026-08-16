@@ -3,3 +3,4 @@ dist
 pylake.egg-info
 .idea
 pylake/__pycache__
+.venv/

@@ -55,30 +55,39 @@ def thermocline(Temp, depth=None, time=None, s=0.2, mixed_cutoff=1, smooth=False
     ...     thermocline depth: 2.878790569183019
     ...     thermocline depth index: 2
     '''
+    Temp, depth = to_xarray(Temp, depth, time)
 
-    Temp, depth = to_xarray(Temp, depth,time)
-
-    is_not_significant = Temp.max('depth')-Temp.min('depth')<mixed_cutoff
+    if control(Temp, depth) != 1:
+        return np.nan, np.nan
+    is_not_significant = (
+        Temp.max("depth") - Temp.min("depth") < mixed_cutoff
+    )
     if smooth:
         time = Temp.time
         Temp = smooth_temp(Temp, depth, smooth)
-        Temp, depth = to_xarray(Temp, depth,time)
-
-    rhoVar = water_density(Temp,s)
-    drho_dz = rhoVar.diff('depth')/rhoVar.depth.diff('depth')
+        Temp, depth = to_xarray(Temp, depth, time)
+    rhoVar = water_density(Temp, s)
+    drho_dz = rhoVar.diff("depth") / rhoVar.depth.diff("depth")
     inf_mask = np.isinf(drho_dz)
     drho_dz = drho_dz.where(~inf_mask, np.nan)
-    thermoInd = drho_dz.fillna(-999).argmax('depth')
+    thermoInd = drho_dz.fillna(-999).argmax("depth")
 
-    thermoD = weighted_method(depth, rhoVar, thermoInd)
+    if Temp.sizes["depth"] == 3:
+        thermoD = (
+        Temp.depth.isel(depth=thermoInd)
+        + Temp.depth.isel(depth=thermoInd + 1)
+    ) / 2
+    else:
+        thermoD = weighted_method(depth, rhoVar, thermoInd)
 
-    thermoInd = abs(thermoD-Temp.depth).fillna(999).argmin('depth')
+    thermoInd = abs(thermoD - Temp.depth).fillna(999).argmin("depth")
 
     thermoD = thermoD.where(~is_not_significant, np.nan)
 
-    if thermoD.size==1:
+    if thermoD.size == 1:
         thermoD = thermoD.values.item()
         thermoInd = thermoInd.data.item()
+
     return thermoD, thermoInd
 
 
@@ -143,47 +152,108 @@ def seasonal_thermocline(Temp, depth=None, time=None, s=0.2, mixed_cutoff=1, Smi
     '''
 
     Temp, depth = to_xarray(Temp, depth, time)
+    if control(Temp, depth) != 1:
+        return np.nan, np.nan
 
-    is_not_significant = (Temp.max('depth') - Temp.min('depth')) < mixed_cutoff
+    is_not_significant = (
+        Temp.max("depth") - Temp.min("depth")
+    ) < mixed_cutoff
 
     time = Temp.time
-    rhoVar = water_density(Temp,s)
-    drho_dz = rhoVar.diff('depth')/rhoVar.depth.diff('depth')
+    if smooth:
+        Temp = smooth_temp(Temp, depth, smooth)
+        Temp, depth = to_xarray(Temp, depth, time)
 
-    # It seems that this is not used...
-    dRhoCut = Smin*np.ones(time.size)
+    rhoVar = water_density(Temp, s)
 
-    thermoD, thermoInd = thermocline(Temp, depth, smooth=smooth, mixed_cutoff=mixed_cutoff)        
+    drho_dz = (
+        rhoVar.diff("depth")
+        / rhoVar.depth.diff("depth")
+    )
+
+    inf_mask = np.isinf(drho_dz)
+    drho_dz = drho_dz.where(~inf_mask, np.nan)
+    thermoD, thermoInd = thermocline(
+        Temp,
+        depth,
+        s=s,
+        mixed_cutoff=mixed_cutoff,
+        smooth=False,
+    )
 
     def process_peaks(arr, Smin, thermoInd):
-        #If no peak is found, set SthermoInd to thermoInd
         arr = arr.copy()
-        locs, peaks = find_peaks(arr, height=Smin)
-        if (len(locs)and(~np.isnan(locs[-1]))):
-            SthermoInd = locs[-1].astype(int)
-        else:
-            SthermoInd = thermoInd
-        return SthermoInd
 
-    SthermoInd = xr.apply_ufunc(process_peaks, drho_dz, Smin, thermoInd, input_core_dims=[['depth'],[],[]],output_core_dims=[[]], vectorize=True)
+        locs, _ = find_peaks(
+            arr,
+            height=Smin,
+        )
+        if len(locs) > 0:
+            return int(locs[-1])
 
-    SthermoD = weighted_method(depth, rhoVar, SthermoInd)
-    SthermoD = SthermoD.where(~is_not_significant, np.nan)
+        return int(thermoInd)
 
-    #Compare the seasonal and the diurnal thermocline, seasonal should be at higher depth than the diurnal, if not, both are set equal.
-    mask = (SthermoD<thermoD)
-    SthermoD = SthermoD.where(~mask, thermoD)
-    SthermoInd = SthermoInd.where(~mask, thermoInd)
+    SthermoInd = xr.apply_ufunc(
+        process_peaks,
+        drho_dz,
+        Smin,
+        thermoInd,
+        input_core_dims=[
+            ["depth"],
+            [],
+            [],
+        ],
+        output_core_dims=[[]],
+        vectorize=True,
+        output_dtypes=[int],
+    )
 
-    SthermoInd = abs(SthermoD-Temp.depth).fillna(999).argmin('depth')
+    if Temp.sizes["depth"] == 3:
+        SthermoD = (
+            Temp.depth.isel(depth=SthermoInd)
+            + Temp.depth.isel(depth=SthermoInd + 1)
+        ) / 2
 
-    if len(SthermoD)!=1:
-        if seasonal_smoothed:
-            SthermoD = smooth_1D(SthermoD, seasonal_smoothed)
-            SthermoD = xr.DataArray(SthermoD, coords={'time':time})
     else:
+        SthermoD = weighted_method(
+            depth,
+            rhoVar,
+            SthermoInd,
+        )
+
+    if (
+        SthermoD.sizes.get("time", 0) > 1
+        and seasonal_smoothed
+    ):
+        smoothed_values = smooth_1D(
+            SthermoD.values,
+            seasonal_smoothed,
+        )
+
+        SthermoD = xr.DataArray(
+            smoothed_values,
+            dims=("time",),
+            coords={"time": time},
+        )
+
+    mask = SthermoD < thermoD
+    SthermoD = SthermoD.where(~mask, thermoD)
+
+    SthermoD = SthermoD.where(
+        ~is_not_significant,
+        np.nan,
+    )
+
+    SthermoInd = (
+        abs(SthermoD - Temp.depth)
+        .fillna(999)
+        .argmin("depth")
+    )
+
+    if SthermoD.size == 1:
         SthermoD = SthermoD.values.item()
         SthermoInd = SthermoInd.values.item()
+
     return SthermoD, SthermoInd
 
 
@@ -323,22 +393,37 @@ def metalimnion(Temp, depth=None, slope=0.25, slope_calc="relative", seasonal=Fa
     Wetzel, R. G. 2001. Limnology: Lake and River Ecosystems, 3rd ed. Academic Press.'''
 
     Temp, depth = to_xarray(Temp, depth)
-    
+
+    if control(Temp, depth) != 1:
+        return np.nan, np.nan
+
     if smooth:
-        time = Temp.time
         Temp = smooth_temp(Temp, depth, smooth)
-        Temp, depth = to_xarray(Temp, depth, time)
 
     if seasonal:
-        thermoD, thermoInd = seasonal_thermocline(Temp, depth, mixed_cutoff=mixed_cutoff, smooth=False, seasonal_smoothed=False)
+        thermoD, thermoInd = seasonal_thermocline(
+            Temp,
+            depth,
+            s=s,
+            mixed_cutoff=mixed_cutoff,
+            smooth=False,
+            seasonal_smoothed=False,
+        )
     else:
-        thermoD, thermoInd = thermocline(Temp, depth, mixed_cutoff=mixed_cutoff, smooth=False)
+        thermoD, thermoInd = thermocline(
+            Temp,
+            depth,
+            s=s,
+            mixed_cutoff=mixed_cutoff,
+            smooth=False,
+        )
 
-    #thermoD, thermoInd = list(map(np.asanyarray, (thermoD, thermoInd)))
-    Temp["thermoInd"] = thermoInd
-    Temp["thermoD"] = thermoD
+    Temp = Temp.assign_coords(
+        thermoInd=thermoInd,
+        thermoD=thermoD,
+    )
 
-    rhoVar = water_density(Temp,s)
+    rhoVar = water_density(Temp, s)
     drho_dz = rhoVar.diff('depth')/rhoVar.depth.diff('depth')
     drho_dz["depth"] = [(a+b)/2 for a,b in zip(depth, depth[1:])]
 
