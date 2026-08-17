@@ -838,8 +838,10 @@ def heat_content(Temp, bthA, bthD, depth=None, s=0.2):
     Io = np.argmin(depth)
     Ao = bthA[Io]
 
-    if Ao==0:
-        print("surface area cannot be zero, check bathymetric file")
+    if Ao == 0:
+        raise ValueError(
+            "surface area cannot be zero, check bathymetric file"
+        )
     
     rhoL = water_density(Temp,s)
     layerD = np.arange(Zo, np.max(depth),dz)
