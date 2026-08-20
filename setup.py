@@ -23,6 +23,7 @@ setup(
         'scipy>=1.5.4',
         'dask>=2022.02.1',
         'xarray>=0.19.0',   
+        'h5netcdf[h5py]',
         'seawater>=3.3.4'
     ],
     license="MIT",

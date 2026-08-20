@@ -4,4 +4,5 @@ PyYAML>=6.0
 scipy>=1.5.4
 dask>=2022.02.1
 xarray>=0.19.0
+h5netcdf[h5py]
 gsw>=3.6.0

@@ -4,3 +4,5 @@ pylake.egg-info
 .idea
 pylake/__pycache__
 .venv/
+__pycache__/
+.pytest_cache/
