@@ -1,4 +1,5 @@
 import json
+import sqlite3
 import tempfile
 import zipfile
 from pathlib import Path
@@ -151,3 +152,196 @@ def read_datalakes(path, time_unit="s"):
 
     return ds
 
+
+def read_rsk(path):
+    path = Path(path)
+
+    with sqlite3.connect(path) as connection:
+        channels = pd.read_sql_query(
+            "SELECT * FROM channels",
+            connection
+        )
+
+        data = pd.read_sql_query(
+            "SELECT * FROM data",
+            connection
+        )
+    time = pd.to_datetime(
+        data.iloc[:, 0],
+        unit="ms"
+    ).to_numpy()
+    variables = {}
+    for i, column in enumerate(data.columns[1:]):
+        channel = channels.iloc[i]
+        name = channel["shortName"]
+        variables[name] = (
+            "time",
+            data[column].to_numpy()
+        )
+
+    ds = xr.Dataset(
+        variables,
+        coords={
+            "time": time
+        }
+    )
+
+    for i, name in enumerate(variables):
+        ds[name].attrs["units"] = channels.iloc[i]["units"]
+        ds[name].attrs["long_name"] = channels.iloc[i]["longName"]
+
+    ds.attrs["source"] = "RBR"
+
+    return ds
+
+def read_kor(path):
+    path = Path(path)
+
+    data = pd.read_csv(
+        path,
+        encoding="utf-16",
+        skiprows=9
+    )
+
+    time = pd.to_datetime(
+        data["DATE (MM/DD/YYYY)"].astype(str)
+        + " "
+        + data["TIME (HH:MM:SS)"].astype(str)
+    ).to_numpy()
+
+    variables = {}
+
+    for column in data.columns:
+        if column in [
+            "TIME (HH:MM:SS)",
+            "DATE (MM/DD/YYYY)"
+        ]:
+            continue
+
+        if pd.api.types.is_numeric_dtype(data[column]):
+            variables[column] = (
+                "time",
+                data[column].to_numpy()
+            )
+
+    ds = xr.Dataset(
+        variables,
+        coords={
+            "time": time
+        }
+    )
+
+    ds.attrs["source"] = "KOR"
+
+    return ds
+
+def read_tob(path):
+    path = Path(path)
+
+    with open(
+        path,
+        "r",
+        encoding="latin-1"
+    ) as f:
+        lines = f.readlines()
+
+    start = None
+
+    for i, line in enumerate(lines):
+        if line.lstrip().startswith("; Datasets"):
+            start = i + 3
+            break
+
+    rows = []
+
+    for line in lines[start:]:
+        values = line.split()
+
+        if len(values) >= 11:
+            rows.append(values[:11])
+
+    data = pd.DataFrame(
+        rows,
+        columns=[
+            "dataset",
+            "pressure",
+            "temperature",
+            "conductivity",
+            "chlorophyll",
+            "turbidity",
+            "pH",
+            "oxygen_saturation",
+            "oxygen_mg_l",
+            "date",
+            "time"
+        ]
+    )
+
+    numeric = [
+        "dataset",
+        "pressure",
+        "temperature",
+        "conductivity",
+        "chlorophyll",
+        "turbidity",
+        "pH",
+        "oxygen_saturation",
+        "oxygen_mg_l"
+    ]
+
+    for column in numeric:
+        data[column] = pd.to_numeric(
+            data[column],
+            errors="coerce"
+        )
+
+    time = pd.to_datetime(
+        data["date"]
+        + " "
+        + data["time"],
+        dayfirst=True
+    ).to_numpy()
+
+    ds = xr.Dataset(
+        {
+            "pressure": (
+                "time",
+                data["pressure"].to_numpy()
+            ),
+            "temperature": (
+                "time",
+                data["temperature"].to_numpy()
+            ),
+            "conductivity": (
+                "time",
+                data["conductivity"].to_numpy()
+            ),
+            "chlorophyll": (
+                "time",
+                data["chlorophyll"].to_numpy()
+            ),
+            "turbidity": (
+                "time",
+                data["turbidity"].to_numpy()
+            ),
+            "pH": (
+                "time",
+                data["pH"].to_numpy()
+            ),
+            "oxygen_saturation": (
+                "time",
+                data["oxygen_saturation"].to_numpy()
+            ),
+            "oxygen_mg_l": (
+                "time",
+                data["oxygen_mg_l"].to_numpy()
+            )
+        },
+        coords={
+            "time": time
+        }
+    )
+
+    ds.attrs["source"] = "Sea & Sun"
+
+    return ds
