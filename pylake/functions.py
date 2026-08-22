@@ -336,3 +336,114 @@ def round_up_to_odd(f):
     return int(
         np.ceil(f) // 2 * 2 + 1
     )
+
+def depth_filter(depth, run_length=20, index=False):
+    depth = np.asarray(depth, dtype=float)
+
+    valid = np.isfinite(depth)
+    original_index = np.flatnonzero(valid)
+    z = depth[valid]
+
+    if len(z) == 0:
+        return original_index if index else z
+
+    deepest = np.argmax(z)
+
+    z = z[:deepest + 1]
+    original_index = original_index[:deepest + 1]
+
+    if len(z) <= run_length:
+        return original_index if index else z
+
+    dz = np.diff(z)
+
+    start = 0
+
+    for i in range(len(dz) - run_length + 1):
+        if np.all(dz[i:i + run_length] >= 0):
+            start = i
+            break
+
+    z = z[start:]
+    original_index = original_index[start:]
+
+    keep = np.ones(len(z), dtype=bool)
+
+    max_depth = z[0]
+
+    for i in range(1, len(z)):
+        if z[i] < max_depth:
+            keep[i] = False
+        else:
+            max_depth = z[i]
+
+    z = z[keep]
+    original_index = original_index[keep]
+
+    if index:
+        return original_index
+
+    return z
+
+
+def depth_average(depth, values):
+    depth = np.asarray(depth, dtype=float)
+    values = np.asarray(values, dtype=float)
+
+    valid = (
+        np.isfinite(depth)
+        & np.isfinite(values)
+    )
+
+    depth = depth[valid]
+    values = values[valid]
+
+    unique_depth, inverse = np.unique(
+        depth,
+        return_inverse=True
+    )
+
+    average = np.array([
+        values[inverse == i].mean()
+        for i in range(len(unique_depth))
+    ])
+
+    return unique_depth, average
+
+
+def center_buoyancy(Temp, depth):
+    from .pylake import buoyancy_freq
+
+    n2 = buoyancy_freq(
+        Temp,
+        depth
+    )
+
+    values = np.asarray(
+        n2
+    ).squeeze()
+
+    buoyancy_depth = np.asarray(
+        n2["avg_depth"]
+    )
+
+    values = np.maximum(
+        values,
+        0
+    )
+
+    valid = (
+        np.isfinite(values)
+        & np.isfinite(buoyancy_depth)
+    )
+
+    values = values[valid]
+    buoyancy_depth = buoyancy_depth[valid]
+
+    if np.sum(values) == 0:
+        return np.nan
+
+    return np.sum(
+        buoyancy_depth * values
+    ) / np.sum(values)
+
