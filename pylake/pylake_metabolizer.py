@@ -7,100 +7,435 @@ from .functions import *
 from .functions_meta import *
 import warnings
 
-def metab_bookkeep(do_obs, do_sat, k_gas, z_mix, irr, Datetime):
-    #May have a problem if multiple year data
-    Datetime, do_obs, do_sat, k_gas, z_mix, irr = list(map(np.asanyarray, (Datetime, do_obs, do_sat, k_gas, z_mix, irr)))
-    loc = locals()
-    dataset = xarray_from_input(metab_bookkeep, loc, coords = {'time':Datetime})
-    if type(dataset["time"][0].values)==np.ndarray:
-        dataset["time"] = pd.to_datetime(dataset["time"], unit='s')
-    ds_grouped = dataset.groupby("time.dayofyear")
-    R = []
-    NEP = []
-    GPP = []
-    DOY = []
-    TIME=[]
-    for group in list(ds_grouped):
-        ds = group[1]
-        doy = group[0]
-        TIME = np.append(TIME, ds["time"][0].values.astype(str)[:10])
-        DOY=np.append(DOY,doy)
-        
-        n = xr.ones_like(ds["do_sat"]).count()
-        
-        dayI = (ds["irr"]>0)
-        nightI = (ds["irr"]<=0)
+def metab_bookkeep(
+    do_obs,
+    do_sat,
+    k_gas,
+    z_mix,
+    irr,
+    Datetime
+):
+    do_obs = np.asarray(
+        do_obs,
+        dtype=float
+    )
 
-        delta_do = ds["do_obs"].diff('time')
+    do_sat = np.asarray(
+        do_sat,
+        dtype=float
+    )
 
-        gas_flux = (ds["do_sat"] - ds["do_obs"]) * (ds["k_gas"]/n) / ds["z_mix"]
+    k_gas = np.asarray(
+        k_gas,
+        dtype=float
+    )
 
-        delta_do_metab = delta_do - gas_flux
-        #gas flux is negative because DO is oversaturated. 
-        #Does this equation assumes under saturation ??
-        #Goal is to remove gas flux
-        #Here if gas flux < 0 means adding something to delta_do
-        
-        nep_day = delta_do_metab.where(dayI)
-        nep_night = delta_do_metab.where(nightI)
-        
-        R = np.append(R, nep_night.mean('time')*n) # should be negative
-        NEP = np.append(NEP, delta_do_metab.mean('time')*n) # can be positive or negative
-        GPP = np.append(GPP, nep_day.mean('time') * dayI.sum('time') - nep_night.mean('time') * dayI.sum('time')) # should be positive
-        if nep_night.mean('time')*n>0:
-            print(1)
-    metab=({"time": TIME, "GPP":GPP, "R":R, "NEP":NEP})
-    return metab
+    z_mix = np.asarray(
+        z_mix,
+        dtype=float
+    )
+
+    irr = np.asarray(
+        irr,
+        dtype=float
+    )
+
+    Datetime = pd.to_datetime(
+        Datetime
+    )
+
+    valid = (
+        np.isfinite(do_obs)
+        & np.isfinite(do_sat)
+        & np.isfinite(k_gas)
+        & np.isfinite(z_mix)
+        & np.isfinite(irr)
+    )
+
+    do_obs = do_obs[valid]
+    do_sat = do_sat[valid]
+    k_gas = k_gas[valid]
+    z_mix = z_mix[valid]
+    irr = irr[valid]
+    Datetime = Datetime[valid]
+
+    if np.any(
+        z_mix <= 0
+    ):
+        raise ValueError(
+            "z_mix must be greater than zero"
+        )
+
+    frame = pd.DataFrame({
+        "datetime": Datetime,
+        "do_obs": do_obs,
+        "do_sat": do_sat,
+        "k_gas": k_gas,
+        "z_mix": z_mix,
+        "irr": irr
+    })
+
+    frame["date"] = (
+        frame["datetime"]
+        .dt.date
+    )
+
+    results = []
+
+    for date, group in frame.groupby(
+        "date",
+        sort=True
+    ):
+        if len(group) < 2:
+            continue
+
+        time = group[
+            "datetime"
+        ]
+
+        delta_time = (
+            time.diff()
+            .dt.total_seconds()
+            .dropna()
+        )
+
+        if len(delta_time) == 0:
+            continue
+
+        timestep = np.median(
+            delta_time
+        )
+
+        freq = (
+            86400
+            / timestep
+        )
+
+        obs = group[
+            "do_obs"
+        ].to_numpy()
+
+        sat = group[
+            "do_sat"
+        ].to_numpy()
+
+        gas = group[
+            "k_gas"
+        ].to_numpy()
+
+        mix = group[
+            "z_mix"
+        ].to_numpy()
+
+        light = group[
+            "irr"
+        ].to_numpy()
+
+        delta_do = np.diff(
+            obs
+        )
+
+        gas_flux = (
+            sat
+            - obs
+        ) * (
+            gas
+            / freq
+        ) / mix
+
+        delta_do_metab = (
+            delta_do
+            - gas_flux[:-1]
+        )
+
+        day = (
+            light[:-1]
+            > 0
+        )
+
+        night = (
+            light[:-1]
+            <= 0
+        )
+
+        if not np.any(day):
+            gpp = np.nan
+        elif not np.any(night):
+            gpp = np.nan
+        else:
+            nep_day = np.mean(
+                delta_do_metab[day]
+            )
+
+            nep_night = np.mean(
+                delta_do_metab[night]
+            )
+
+            gpp = (
+                nep_day
+                - nep_night
+            ) * np.sum(day)
+
+        if np.any(night):
+            respiration = (
+                np.mean(
+                    delta_do_metab[night]
+                )
+                * freq
+            )
+        else:
+            respiration = np.nan
+
+        nep = (
+            np.mean(
+                delta_do_metab
+            )
+            * freq
+        )
+
+        results.append({
+            "time": str(date),
+            "GPP": gpp,
+            "R": respiration,
+            "NEP": nep
+        })
+
+    return pd.DataFrame(
+        results
+    )
 
 
-def metab_ols(wtr, do_obs, do_sat, k_gas, z_mix, irr, Datetime):
-    from sklearn.linear_model import LinearRegression
-    #Format and get rid of NaNs
-    Datetime, do_obs, do_sat, k_gas, z_mix, irr = list(map(np.asanyarray, (Datetime, do_obs, do_sat, k_gas, z_mix, irr)))
-    mask_nan = ~np.isnan(wtr)&~np.isnan(do_obs)&~np.isnan(do_sat)&~np.isnan(k_gas)&~np.isnan(z_mix)&~np.isnan(irr)
-    do_obs, do_sat, k_gas, z_mix, irr, wtr = do_obs[mask_nan], do_sat[mask_nan], k_gas[mask_nan], z_mix[mask_nan], irr[mask_nan], wtr[mask_nan]
+def metab_ols(
+    wtr,
+    do_obs,
+    do_sat,
+    k_gas,
+    z_mix,
+    irr,
+    Datetime
+):
+    wtr = np.asarray(
+        wtr,
+        dtype=float
+    )
 
-    loc = locals()
-    dataset = xarray_from_input(metab_ols, loc, coords = {'time':Datetime})
-    ds_grouped = dataset.groupby("time.dayofyear")
-    R = []
-    NEP = []
-    GPP = []
-    DOY = []
-    for group in list(ds_grouped):
-        ds = group[1]
-        doy = group[0]
-        n = xr.ones_like(ds["do_sat"]).count()
+    do_obs = np.asarray(
+        do_obs,
+        dtype=float
+    )
 
-        do_diff = ds["do_obs"].diff('time')
-        inst_flux = (ds["k_gas"]/n) * (ds["do_sat"] - ds["do_obs"])  # positive is into the lake
+    do_sat = np.asarray(
+        do_sat,
+        dtype=float
+    )
 
-        # flux = (inst_flux[1:(n.obs-1)] + inst_flux[-1])/2
-        flux = inst_flux
+    k_gas = np.asarray(
+        k_gas,
+        dtype=float
+    )
 
-        noflux_do_diff = do_diff - flux/ds["z_mix"]
+    z_mix = np.asarray(
+        z_mix,
+        dtype=float
+    )
 
-        lntemp = np.log(ds["wtr"])
+    irr = np.asarray(
+        irr,
+        dtype=float
+    )
 
-        regr = LinearRegression()
-        df = pd.DataFrame({"noflux_do_diff":noflux_do_diff, "irr": ds["irr"][:-1], "lntemp":lntemp[:-1]})
-        X= df[['irr', 'lntemp']]
-        y = df["noflux_do_diff"] 
-        reg = regr.fit(X,y)
-        iota = reg.coef_[0]
-        rho = reg.coef_[1]
+    Datetime = pd.to_datetime(
+        Datetime
+    )
 
-        gpp = np.nanmean(iota*ds["irr"][:-1])*n
-        resp = np.nanmean(rho*lntemp[:-1])*n
-        nep = gpp + resp
+    valid = (
+        np.isfinite(wtr)
+        & np.isfinite(do_obs)
+        & np.isfinite(do_sat)
+        & np.isfinite(k_gas)
+        & np.isfinite(z_mix)
+        & np.isfinite(irr)
+    )
 
-        GPP = np.append(GPP,gpp)
-        R = np.append(R,resp)
-        NEP = np.append(NEP, nep)
-        DOY=np.append(DOY,doy)
+    wtr = wtr[valid]
+    do_obs = do_obs[valid]
+    do_sat = do_sat[valid]
+    k_gas = k_gas[valid]
+    z_mix = z_mix[valid]
+    irr = irr[valid]
+    Datetime = Datetime[valid]
 
-    results = {"DOY": DOY, "GPP":GPP, "R":R, "NEP":NEP}
-    return(results)
+    if np.any(
+        z_mix <= 0
+    ):
+        raise ValueError(
+            "z_mix must be greater than zero"
+        )
+
+    if np.any(
+        wtr <= 0
+    ):
+        raise ValueError(
+            "all wtr must be positive"
+        )
+
+    frame = pd.DataFrame({
+        "datetime": Datetime,
+        "wtr": wtr,
+        "do_obs": do_obs,
+        "do_sat": do_sat,
+        "k_gas": k_gas,
+        "z_mix": z_mix,
+        "irr": irr
+    })
+
+    frame["date"] = (
+        frame["datetime"]
+        .dt.date
+    )
+
+    results = []
+
+    for date, group in frame.groupby(
+        "date",
+        sort=True
+    ):
+        if len(group) < 2:
+            continue
+
+        time = group[
+            "datetime"
+        ]
+
+        delta = (
+            time.diff()
+            .dt.total_seconds()
+            .dropna()
+        )
+
+        if len(delta) == 0:
+            continue
+
+        dt = np.median(
+            delta
+        )
+
+        freq = (
+            86400
+            / dt
+        )
+
+        obs = group[
+            "do_obs"
+        ].to_numpy()
+
+        sat = group[
+            "do_sat"
+        ].to_numpy()
+
+        gas = group[
+            "k_gas"
+        ].to_numpy()
+
+        mix = group[
+            "z_mix"
+        ].to_numpy()
+
+        light = group[
+            "irr"
+        ].to_numpy()
+
+        temp = group[
+            "wtr"
+        ].to_numpy()
+
+        do_diff = np.diff(
+            obs
+        )
+
+        inst_flux = (
+            gas
+            / freq
+        ) * (
+            sat
+            - obs
+        )
+
+        flux = inst_flux[:-1]
+
+        noflux_do_diff = (
+            do_diff
+            - flux
+            / mix[:-1]
+        )
+
+        lntemp = np.log(
+            temp
+        )
+
+        X = np.column_stack([
+            light[:-1],
+            lntemp[:-1]
+        ])
+
+        valid_fit = (
+            np.isfinite(
+                noflux_do_diff
+            )
+            & np.all(
+                np.isfinite(X),
+                axis=1
+            )
+        )
+
+        X = X[
+            valid_fit
+        ]
+
+        y = noflux_do_diff[
+            valid_fit
+        ]
+
+        if len(y) < 2:
+            continue
+
+        coeffs = np.linalg.lstsq(
+            X,
+            y,
+            rcond=None
+        )[0]
+
+        iota = coeffs[0]
+        rho = coeffs[1]
+
+        gpp = (
+            np.mean(
+                iota * X[:, 0]
+            )
+            * freq
+        )
+
+        resp = (
+            np.mean(
+                rho * X[:, 1]
+            )
+            * freq
+        )
+
+        results.append({
+            "date": date,
+            "GPP": gpp,
+            "R": resp,
+            "NEP": gpp + resp,
+            "iota": iota,
+            "rho": rho
+        })
+
+    return pd.DataFrame(
+        results
+    )
+
+
 '''
 def metab_mle(do_obs, do_sat, k_gas, z_mix, irr, wtr, freq, error_type="OE"):
     freq, do_obs, do_sat, k_gas, z_mix, irr = list(map(np.asanyarray, (freq, do_obs, do_sat, k_gas, z_mix, irr)))
@@ -140,88 +475,231 @@ def metab_mle(do_obs, do_sat, k_gas, z_mix, irr, wtr, freq, error_type="OE"):
 
     return(list("params"=pars, "metab"=c("GPP"=GPP,"R"=R,"NEP"=GPP+R)))
     '''
-def o2_at_sat(temp, baro=None, altitude=0, salinity=.2, model='garcia-benson'):
-    #temp, baro, altitude, salinity = list(map(np.asanyarray, (temp, baro, altitude, salinity)))
-    # Conversion from mL/L (the usual output of the garcia, weiss, etc. equations)
-    # to mg/L per USGS memo 2011.03
+def o2_at_sat(
+    temp,
+    baro=None,
+    altitude=0,
+    salinity=0,
+    model="garcia-benson"
+):
+    temp = np.asarray(
+        temp,
+        dtype=float
+    )
+
+    salinity = np.asarray(
+        salinity,
+        dtype=float
+    )
+
+    if salinity.ndim == 0:
+        salinity = np.full_like(
+            temp,
+            salinity
+        )
+
     mgL_mlL = 1.42905
+    mmHg_mb = 0.750061683
 
-    # Correction for air pressure; incorportes effects of altitude & vapor pressure of water
-    mmHg_mb = 0.750061683 # conversion from mm Hg to millibars
     if baro is None:
-        mmHg_inHg = 25.3970886 # conversion from inches Hg to mm Hg
-        standard_pressure_sea_level = 29.92126 # Pb, inches Hg
-        standard_temperature_sea_level = 15 + 273.15 # Tb, 15 C = 288.15 K
-        gravitational_acceleration = 9.80665 # g0, m/s**2
-        air_molar_mass = 0.0289644 # M, molar mass of Earth's air (kg/mol)
-        universal_gas_constant = 8.31447 #8.31432 # R*, N*m/(mol*K)
+        mmHg_inHg = 25.3970886
+        standard_pressure_sea_level = 29.92126
+        standard_temperature_sea_level = 288.15
+        gravitational_acceleration = 9.80665
+        air_molar_mass = 0.0289644
+        universal_gas_constant = 8.31447
 
-        # estimate pressure by the barometric formula
-        baro = (1/mmHg_mb) * mmHg_inHg * standard_pressure_sea_level * \
-            np.exp( (-gravitational_acceleration * air_molar_mass * altitude) / (universal_gas_constant * standard_temperature_sea_level) )
-        baro = np.ones(len(temp))*baro
-    
-    # pressure correction per USGS memos 81.11 and 81.15. calculate u by Antoine equation.
-    u = 10 ** (8.10765 - 1750.286 / (235 + temp)) # u is vapor pressure of water; water temp is used as an approximation for water & air temp at the air-water boundary
-    press_corr = (baro*mmHg_mb - u) / (760 - u) # pressure correction is ratio of current to standard pressure after correcting for vapor pressure of water. 0.750061683 mmHg/mb
+        baro = (
+            (1 / mmHg_mb)
+            * mmHg_inHg
+            * standard_pressure_sea_level
+            * np.exp(
+                (
+                    -gravitational_acceleration
+                    * air_molar_mass
+                    * altitude
+                )
+                / (
+                    universal_gas_constant
+                    * standard_temperature_sea_level
+                )
+            )
+        )
 
-    # Estimate O2 at saturation in mL/L by several models
-    if(model == 'garcia'):
+    baro = np.asarray(
+        baro,
+        dtype=float
+    )
 
-        Ts = np.log((298.15 - temp)/(273.15 + temp))
+    u = 10 ** (
+        8.10765
+        - 1750.286
+        / (235 + temp)
+    )
 
-        lnC = 2.00856 + 3.22400 *Ts + 3.99063*Ts**2 + 4.80299*Ts**3 + 9.78188e-1*Ts**4 + \
-        1.71069*Ts**5 - salinity*(6.24097e-3 + 6.93498e-3*Ts + 6.90358e-3*Ts**2 + 4.29155e-3*Ts**3) - 3.1168e-7*salinity**2
+    press_corr = (
+        baro * mmHg_mb - u
+    ) / (
+        760 - u
+    )
 
-        o2_sat = np.exp(lnC)
+    model = model.lower()
 
-    elif((model) == 'garcia-benson'):
-        
-        Ts = np.log((298.15 - temp)/(273.15 + temp))
-        
-        lnC = 2.00907 + 3.22014*Ts + 4.05010*Ts**2 + 4.94457*Ts**3 + -2.56847e-1*Ts**4 + \
-        3.88767*Ts**5 - salinity*(6.24523e-3 + 7.37614e-3*Ts + 1.03410e-2*Ts**2 + 8.17083e-3*Ts**3) - 4.88682e-7*salinity**2
-        
-        o2_sat = np.exp(lnC)
-        
-    elif((model) == 'weiss'):
+    if model == "garcia":
+        Ts = np.log(
+            (298.15 - temp)
+            / (273.15 + temp)
+        )
+
+        lnC = (
+            2.00856
+            + 3.22400 * Ts
+            + 3.99063 * Ts**2
+            + 4.80299 * Ts**3
+            + 9.78188e-1 * Ts**4
+            + 1.71069 * Ts**5
+            - salinity * (
+                6.24097e-3
+                + 6.93498e-3 * Ts
+                + 6.90358e-3 * Ts**2
+                + 4.29155e-3 * Ts**3
+            )
+            - 3.1168e-7 * salinity**2
+        )
+
+        o2_sat = np.exp(
+            lnC
+        )
+
+    elif model == "garcia-benson":
+        Ts = np.log(
+            (298.15 - temp)
+            / (273.15 + temp)
+        )
+
+        lnC = (
+            2.00907
+            + 3.22014 * Ts
+            + 4.05010 * Ts**2
+            + 4.94457 * Ts**3
+            - 2.56847e-1 * Ts**4
+            + 3.88767 * Ts**5
+            - salinity * (
+                6.24523e-3
+                + 7.37614e-3 * Ts
+                + 1.03410e-2 * Ts**2
+                + 8.17083e-3 * Ts**3
+            )
+            - 4.88682e-7 * salinity**2
+        )
+
+        o2_sat = np.exp(
+            lnC
+        )
+
+    elif model == "weiss":
         tempk = temp + 273.15
 
-        lnC = -173.4292 + 249.6339 * (100 / tempk) + 143.3483 * \
-        np.log(tempk / 100) - 21.8492 * (tempk / 100) + \
-        salinity * (-0.033096 + 0.014259 * (tempk / 100) - 0.0017000 * (tempk / 100)**2)
-            
-        o2_sat = np.exp(lnC)
+        lnC = (
+            -173.4292
+            + 249.6339 * (
+                100 / tempk
+            )
+            + 143.3483 * np.log(
+                tempk / 100
+            )
+            - 21.8492 * (
+                tempk / 100
+            )
+            + salinity * (
+                -0.033096
+                + 0.014259 * (
+                    tempk / 100
+                )
+                - 0.0017000 * (
+                    tempk / 100
+                )**2
+            )
+        )
 
+        o2_sat = np.exp(
+            lnC
+        )
 
-    o2_sat = o2_sat * mgL_mlL * press_corr
+    elif model == "benson":
+        if np.any(
+            salinity != 0
+        ):
+            import warnings
 
-    return(o2_sat)
+            warnings.warn(
+                "Benson model does not currently include salinity"
+            )
+
+        o2_sat = (
+            -0.00006 * temp**3
+            + 0.00725 * temp**2
+            - 0.39571 * temp
+            + 14.59030
+        )
+
+        o2_sat = (
+            o2_sat
+            / mgL_mlL
+        )
+
+    else:
+        raise ValueError(
+            f"unrecognized model: {model}"
+        )
+
+    return (
+        o2_sat
+        * mgL_mlL
+        * press_corr
+    )
+
 
 def k_cole(wnd):
     k600 = 2.07 + (0.215*(wnd**(1.7)))
     k600 = k600*24/100 #units in m d-1
     return k600
 
-def k_crusius(wnd, method='power'):
-    # -- References 
-    # CRUSIUS, JOHN, AND RIK WANNINKHOF. 2003
-    # Gas transfer velocities measured at low wind speed over a lake.
-    # Limnology and Oceanography. 48(3): 1010:1017.
-    U10 = wnd
-    if method=='constant':
-        mask = U10<3.7
-        k600 = 0.72*U10
-        k600[~mask] = 14*U10-17.9
-    elif method=='bilinear':
-        mask = U10<3.7
-        k600 = 0.72*U10
-        k600[~mask] = 4.33*U10-13.3
-    elif method =='power':
-        k600 = 0.228*U10**2.2+0.168 # units in cm h-1
+def k_crusius(wnd, method="power"):
+    wnd = np.asarray(
+        wnd,
+        dtype=float
+    )
 
-    k600 = k600*24/100
-    return k600
+    method = method.lower()
+
+    if method == "constant":
+        k600 = np.where(
+            wnd < 3.7,
+            1,
+            5.14 * wnd - 17.9
+        )
+
+    elif method == "bilinear":
+        k600 = np.where(
+            wnd < 3.7,
+            0.72 * wnd,
+            4.33 * wnd - 13.3
+        )
+
+    elif method == "power":
+        k600 = (
+            0.228 * wnd**2.2
+            + 0.168
+        )
+
+    else:
+        raise ValueError(
+            "method must be one of: power, constant, bilinear"
+        )
+
+    return k600 * 24 / 100
+
 
 def k_read(wnd_z, Qsen, Qlat, Cd, Kd, lat, A0, air_press, dateTime, Ts, hML, airT, wnd, RH, sw, lwnet, lwnet_mode=1, s=0.2):
     #'@param wnd Numeric value of wind speed, (Units:m/s)
