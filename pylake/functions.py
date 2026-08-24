@@ -6,7 +6,7 @@ import warnings
 def control(Temp, depths):
     if Temp.sizes["depth"] < 3:
         warnings.warn(
-            "Could not deduce thermocline with less than 3 measurements"
+            "At least 3 measurements are required"
         )
         return np.nan
     elif len(depths) != len(np.unique(depths)):
@@ -132,7 +132,7 @@ def smooth_temp(Temp, depths, smooth):
 
 def weighted_method(depths, rho, z_idx):
     """
-    Refine thermocline depth between measurement depths.
+    Refine a target depth between measurement depths.
 
     Parameters
     ----------
@@ -145,8 +145,8 @@ def weighted_method(depths, rho, z_idx):
 
     Returns
     -------
-    weighted_thermoD : xarray.DataArray
-        Refined thermocline depth.
+    weighted_depth : xarray.DataArray
+        Refined depth.
     """
 
     if not isinstance(rho, xr.DataArray):
@@ -204,7 +204,7 @@ def weighted_method(depths, rho, z_idx):
         drho - drho_minu
     )
 
-    weighted_thermoD = (
+    weighted_depth = (
         depths.isel(depth=z_masked + 1)
         * (Dplus / (Dminu + Dplus))
         + depths.isel(depth=z_masked)
@@ -216,27 +216,27 @@ def weighted_method(depths, rho, z_idx):
         & np.isinf(Dminu / (Dminu + Dplus))
     )
 
-    weighted_thermoD = weighted_thermoD.where(
+    weighted_depth = weighted_depth.where(
         ~mask_up,
         (depths[0] + depths[1]) / 2,
     )
 
-    weighted_thermoD = weighted_thermoD.where(
+    weighted_depth = weighted_depth.where(
         ~mask_down,
         (depths[-1] + depths[-2]) / 2,
     )
 
-    weighted_thermoD = weighted_thermoD.where(
+    weighted_depth = weighted_depth.where(
         ~mask_inf,
         np.nan,
     )
 
     try:
-        weighted_thermoD = weighted_thermoD.drop_vars("depth")
+        weighted_depth = weighted_depth.drop_vars("depth")
     except (ValueError, KeyError):
         pass
 
-    return weighted_thermoD
+    return weighted_depth
 
 def check_bathy(Temp, bthA, bthD, depth):
     numD = Temp.shape[1] - 1
@@ -290,10 +290,10 @@ def format_Temp(depths, Temp):
     return Temp
 
 
-def find_nearest_index(old_depths, SthermoD):
+def find_nearest_index(old_depths, target_depth):
     depth_index = np.argmin(
         np.abs(
-            SthermoD
+            target_depth
             - old_depths.reshape(-1, 1)
         ),
         axis=0,
@@ -302,10 +302,10 @@ def find_nearest_index(old_depths, SthermoD):
     return depth_index
 
 
-def find_nearest(old_depths, SthermoD):
+def find_nearest(old_depths, target_depth):
     depth_index = find_nearest_index(
         old_depths,
-        SthermoD,
+        target_depth,
     )
 
     nearest_depth = old_depths[
@@ -313,7 +313,7 @@ def find_nearest(old_depths, SthermoD):
     ]
 
     nearest_depth = set_nan(
-        SthermoD,
+        target_depth,
         nearest_depth,
     )
 
