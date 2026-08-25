@@ -1,11 +1,117 @@
 import json
 import zipfile
+from pathlib import Path
 
 import numpy as np
 import pytest
 import xarray as xr
+import pylake
 
-from pylake.io import datalakes_to_xarray, read_datalakes, read_rsk, read_kor, read_tob
+from pylake.io import read, datalakes_to_xarray, read_datalakes, read_rsk, read_kor, read_tob
+
+
+def test_read_public_api():
+    assert pylake.read is read
+
+
+@pytest.mark.parametrize(
+    ("suffix", "expected_source"),
+    [
+        (".json", "datalakes"),
+        (".nc", "datalakes"),
+        (".zip", "datalakes"),
+        (".rsk", "rsk"),
+        (".csv", "kor"),
+        (".tob", "tob"),
+    ],
+)
+def test_read_dispatch_by_extension(
+    tmp_path,
+    monkeypatch,
+    suffix,
+    expected_source,
+):
+    path = tmp_path / f"data{suffix}"
+    path.touch()
+
+    calls = []
+
+    def reader(path, **kwargs):
+        calls.append((Path(path), kwargs))
+        return expected_source
+
+    function_name = {
+        "datalakes": "read_datalakes",
+        "rsk": "read_rsk",
+        "kor": "read_kor",
+        "tob": "read_tob",
+    }[expected_source]
+
+    monkeypatch.setitem(
+        read.__globals__,
+        function_name,
+        reader,
+    )
+
+    assert read(path) == expected_source
+    assert calls == [(path, {})]
+
+
+def test_read_forced_source(tmp_path, monkeypatch):
+    path = tmp_path / "profile.data"
+    path.touch()
+
+    monkeypatch.setitem(
+        read.__globals__,
+        "read_kor",
+        lambda path, **kwargs: "kor",
+    )
+
+    assert read(path, source="kor") == "kor"
+
+
+def test_read_unknown_source(tmp_path):
+    path = tmp_path / "profile.data"
+    path.write_text("unknown format")
+
+    with pytest.raises(
+        ValueError,
+        match="Could not detect",
+    ):
+        read(path)
+
+
+def test_read_detects_kor_content(tmp_path, monkeypatch):
+    path = tmp_path / "profile.data"
+    path.write_text(
+        "KOR MEASUREMENT DATA FILE EXPORT\n"
+        "TIME (HH:MM:SS),DATE (MM/DD/YYYY)",
+        encoding="utf-16",
+    )
+
+    monkeypatch.setitem(
+        read.__globals__,
+        "read_kor",
+        lambda path, **kwargs: "kor",
+    )
+
+    assert read(path) == "kor"
+
+
+def test_read_detects_tob_content(tmp_path, monkeypatch):
+    path = tmp_path / "profile.data"
+    path.write_text(
+        "; Datasets Press Temp",
+        encoding="latin-1",
+    )
+
+    monkeypatch.setitem(
+        read.__globals__,
+        "read_tob",
+        lambda path, **kwargs: "tob",
+    )
+
+    assert read(path) == "tob"
 
 
 def test_datalakes_to_xarray():

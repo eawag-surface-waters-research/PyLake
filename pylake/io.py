@@ -9,6 +9,155 @@ import pandas as pd
 import xarray as xr
 
 
+def _detect_source(path):
+    """Detect a supported data source from its extension or file signature."""
+    path = Path(path)
+    suffix = path.suffix.lower()
+
+    suffix_sources = {
+        ".json": "datalakes",
+        ".nc": "datalakes",
+        ".zip": "datalakes",
+        ".rsk": "rsk",
+        ".csv": "kor",
+        ".tob": "tob",
+    }
+
+    if suffix in suffix_sources:
+        return suffix_sources[suffix]
+
+    with path.open("rb") as file:
+        header = file.read(65536)
+
+    if header.startswith(b"SQLite format 3\x00"):
+        return "rsk"
+
+    if header.startswith(b"PK\x03\x04"):
+        return "datalakes"
+
+    if (
+        header.startswith(b"\x89HDF\r\n\x1a\n")
+        or header.startswith((b"CDF\x01", b"CDF\x02", b"CDF\x05"))
+    ):
+        return "datalakes"
+
+    stripped = header.lstrip()
+
+    if stripped.startswith((b"{", b"[")):
+        return "datalakes"
+
+    decoded = []
+
+    for encoding in ("utf-16", "utf-8", "latin-1"):
+        try:
+            decoded.append(header.decode(encoding))
+        except UnicodeDecodeError:
+            continue
+
+    text = "\n".join(decoded)
+
+    if (
+        "KOR MEASUREMENT DATA FILE EXPORT" in text.upper()
+        or (
+            "TIME (HH:MM:SS)" in text
+            and "DATE (MM/DD/YYYY)" in text
+        )
+    ):
+        return "kor"
+
+    if "; Datasets" in text:
+        return "tob"
+
+    raise ValueError(
+        "Could not detect the data source. Set source to one of: "
+        "datalakes, rsk, kor, tob"
+    )
+
+
+def read(path, source="auto", **kwargs):
+    """Read a supported lake or profiler data file.
+
+    This is the main PyLake entry point for data import. In most cases the user
+    only needs to provide a file path; PyLake selects the appropriate reader.
+
+    Method
+    ----------
+    Standard extensions are mapped directly to their readers. When an extension
+    is unknown, the beginning of the file is inspected for SQLite, ZIP,
+    NetCDF/HDF5, JSON, KOR, or Sea & Sun TOB signatures. ``source`` can be used
+    to bypass automatic detection for ambiguous or incorrectly named files.
+
+    Parameters
+    ----------
+    path : path_like
+        Path to a DataLakes, RBR RSK, KOR, or Sea & Sun TOB file.
+    source : {"auto", "datalakes", "rsk", "rbr", "kor", "tob"}, default: "auto"
+        Data source to detect or force.
+    **kwargs
+        Additional arguments passed to the selected reader. For example,
+        ``time_unit`` can be supplied for numeric DataLakes timestamps.
+
+    Returns
+    -------
+    xarray.Dataset
+        Dataset returned by the selected source-specific reader.
+
+    Raises
+    ------
+    FileNotFoundError
+        If ``path`` does not exist.
+    ValueError
+        If the source cannot be detected or is not supported.
+
+    Examples
+    ----------
+    >>> data = read("profile.rsk")
+    >>> data = read("profile.tob")
+    >>> data = read("export.csv", source="kor")
+
+    See Also
+    ----------
+    read_datalakes, read_rsk, read_kor, read_tob
+    """
+    path = Path(path)
+
+    if not path.exists():
+        raise FileNotFoundError(path)
+
+    normalized_source = str(source).lower().replace("-", "_").replace(" ", "_")
+
+    aliases = {
+        "rbr": "rsk",
+        "sea_and_sun": "tob",
+        "sea&sun": "tob",
+    }
+
+    normalized_source = aliases.get(
+        normalized_source,
+        normalized_source,
+    )
+
+    if normalized_source == "auto":
+        normalized_source = _detect_source(path)
+
+    readers = {
+        "datalakes": read_datalakes,
+        "rsk": read_rsk,
+        "kor": read_kor,
+        "tob": read_tob,
+    }
+
+    if normalized_source not in readers:
+        raise ValueError(
+            "source must be one of: auto, datalakes, rsk, rbr, kor, tob"
+        )
+
+    return readers[normalized_source](
+        path,
+        **kwargs,
+    )
+
+
 def datalakes_to_xarray(data, time_unit="s"):
     """Convert a DataLakes temperature payload to an xarray dataset.
 
