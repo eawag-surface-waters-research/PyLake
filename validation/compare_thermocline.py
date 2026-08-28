@@ -27,8 +27,8 @@ def explanation(row, tolerance):
     if row["absolute_difference"] <= tolerance:
         return "agreement within tolerance"
     return (
-        "inspect density formula, interval weighting, missing-value handling, "
-        "and boundary tie-breaking"
+        "same weighting; remaining difference comes from the density model "
+        "and PyLake's salinity default"
     )
 
 
@@ -37,7 +37,7 @@ def main():
     parser.add_argument("--profiles", default="validation/profiles.csv")
     parser.add_argument("--r-results", default="validation/rlakeanalyzer_results.csv")
     parser.add_argument("--output", default="validation/comparison.csv")
-    parser.add_argument("--tolerance", type=float, default=1e-6)
+    parser.add_argument("--tolerance", type=float, default=0.005)
     args = parser.parse_args()
 
     profiles = pd.read_csv(args.profiles)

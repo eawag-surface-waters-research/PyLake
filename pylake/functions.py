@@ -318,16 +318,6 @@ def weighted_method(depths, rho, z_idx):
         z_masked - 1,
     )
 
-    hplus = (
-        depths.isel(depth=z_masked)
-        - depths.isel(depth=z_masked + 2)
-    ) / 2
-
-    hminu = (
-        depths.isel(depth=z_masked - 1)
-        - depths.isel(depth=z_masked + 1)
-    ) / 2
-
     drho = drho_dz.isel(
         depth=z_masked
     )
@@ -340,24 +330,41 @@ def weighted_method(depths, rho, z_idx):
         depth=z_masked - 1
     )
 
-    Dplus = hplus / (
-        drho - drho_plus
+    Sdn = -(
+        depths.isel(depth=z_masked + 1)
+        - depths.isel(depth=z_masked)
+    ) / (
+        drho_plus - drho
     )
 
-    Dminu = hminu / (
+    Sup = (
+        depths.isel(depth=z_masked)
+        - depths.isel(depth=z_masked - 1)
+    ) / (
         drho - drho_minu
     )
 
     weighted_depth = (
         depths.isel(depth=z_masked + 1)
-        * (Dplus / (Dminu + Dplus))
+        * (Sdn / (Sdn + Sup))
         + depths.isel(depth=z_masked)
-        * (Dminu / (Dminu + Dplus))
+        * (Sup / (Sdn + Sup))
     )
 
-    mask_inf = (
-        np.isinf(Dplus / (Dminu + Dplus))
-        & np.isinf(Dminu / (Dminu + Dplus))
+    midpoint = (
+        depths.isel(depth=z_masked)
+        + depths.isel(depth=z_masked + 1)
+    ) / 2
+
+    invalid_weight = (
+        ~np.isfinite(Sdn)
+        | ~np.isfinite(Sup)
+        | ~np.isfinite(weighted_depth)
+    )
+
+    weighted_depth = weighted_depth.where(
+        ~invalid_weight,
+        midpoint,
     )
 
     weighted_depth = weighted_depth.where(
@@ -368,11 +375,6 @@ def weighted_method(depths, rho, z_idx):
     weighted_depth = weighted_depth.where(
         ~mask_down,
         (depths[-1] + depths[-2]) / 2,
-    )
-
-    weighted_depth = weighted_depth.where(
-        ~mask_inf,
-        np.nan,
     )
 
     try:
