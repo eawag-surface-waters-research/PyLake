@@ -1,6 +1,23 @@
 import numpy as np
 from .functions import *
 def xarray_from_input(func, locals, coords):
+    """Collect a function's local inputs in an xarray dataset.
+
+    Parameters
+    ----------
+    func : callable
+        Function whose argument names determine which local values are copied.
+    locals : dict
+        Mapping of local names to values.
+    coords : mapping
+        Coordinates passed to :class:`xarray.Dataset`.
+
+    Returns
+    -------
+    xarray.Dataset
+        Available arguments stored as time-dependent variables when possible,
+        otherwise as scalar or already dimensioned values.
+    """
     ds = xr.Dataset(coords=coords)
     for var in func.__code__.co_varnames:
         try:
@@ -13,6 +30,24 @@ def xarray_from_input(func, locals, coords):
 
 
 def getSchmidt(temperature, gas):
+    """Calculate the Schmidt number of a dissolved gas in freshwater.
+
+    Parameters
+    ----------
+    temperature : array_like
+        Water temperature in degrees Celsius.
+    gas : {"He", "O2", "CO2", "CH4", "SF6", "N2O", "Ar", "N2"}
+        Gas whose polynomial coefficients are used.
+
+    Returns
+    -------
+    array_like
+        Dimensionless Schmidt number.
+
+    Notes
+    -----
+    The coefficient table is intended for approximately 4--35 degrees Celsius.
+    """
     range_t = [4,35]
     gases = {"He":[368,-16.75,0.374,-0.0036],
 	            "O2":[1568,-86.04,2.142,-0.0216],
@@ -31,6 +66,16 @@ def getSchmidt(temperature, gas):
     return Sc
 
 def thermalExpFromTemp(Ts):
+    """Estimate the thermal expansion coefficient of freshwater.
+
+    Density is evaluated at ``Ts`` and ``Ts + 0.001`` degrees Celsius and the
+    specific-volume derivative is approximated by a forward difference.
+
+    Returns
+    -------
+    array_like
+        Thermal expansion coefficient per degree Celsius.
+    """
     
     V = 1       
     dT = 0.001 
@@ -42,6 +87,18 @@ def thermalExpFromTemp(Ts):
     return alpha
 
 def getKinematicVis(Ts):
+    """Interpolate water kinematic viscosity from a temperature table.
+
+    Parameters
+    ----------
+    Ts : array_like
+        Water temperature in degrees Celsius.
+
+    Returns
+    -------
+    array_like
+        Kinematic viscosity in square metres per second.
+    """
     # from Mays 2005, Water Resources Engineering
     tempTable = np.arange(0,101,5)
     # table in m2/s E-6
