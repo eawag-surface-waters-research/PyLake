@@ -3,10 +3,10 @@ from .functions import *
 import gsw
 from scipy.interpolate import interp1d
 import warnings
-from scipy.signal import find_peaks,savgol_filter
+from scipy.signal import savgol_filter
 import xarray as xr
     
-def thermocline(Temp, depth=None, time=None, s=0.2, mixed_cutoff=1, smooth=False):
+def thermocline(Temp, depth=None, time=None, s=0.2, mixed_cutoff=1, smooth=False, weighted=True):
     '''
     Calculate the thermocline depth from one or various temperature profiles.
     It uses the method of the maximum gradient, the results can be interpreted
@@ -26,6 +26,8 @@ def thermocline(Temp, depth=None, time=None, s=0.2, mixed_cutoff=1, smooth=False
         a numeric vector of water temperature in degrees C
     depth : array_like
         a numeric vector corresponding to the depth (in m) of the Temp
+    time : array_like, default: None
+        Profile timestamps. Sequential integers are used when omitted.
     s : array_like, default : 0.2
         Salinity of the water column in PSU
     mixed_cutoff : scalar, default: 1
@@ -36,6 +38,10 @@ def thermocline(Temp, depth=None, time=None, s=0.2, mixed_cutoff=1, smooth=False
         depth length, order:3, method=nearest)
         Smoothing is recommended when the thermocline is located at a lower resolution 
         sensors (sensors are more spaced at the thermocline)
+    weighted : bool, default: True
+        Refine the thermocline between measurement depths using the method of
+        Read et al. (2011). When False, return the midpoint of the interval
+        containing the maximum density gradient.
 
     Returns 
     ----------
@@ -72,7 +78,7 @@ def thermocline(Temp, depth=None, time=None, s=0.2, mixed_cutoff=1, smooth=False
     drho_dz = drho_dz.where(~inf_mask, np.nan)
     thermoInd = drho_dz.fillna(-999).argmax("depth")
 
-    if Temp.sizes["depth"] == 3:
+    if Temp.sizes["depth"] == 3 or not weighted:
         thermoD = (
         Temp.depth.isel(depth=thermoInd)
         + Temp.depth.isel(depth=thermoInd + 1)
@@ -92,7 +98,7 @@ def thermocline(Temp, depth=None, time=None, s=0.2, mixed_cutoff=1, smooth=False
 
 
 
-def seasonal_thermocline(Temp, depth=None, time=None, s=0.2, mixed_cutoff=1, Smin=0.1, seasonal_smoothed=True, smooth=False):
+def seasonal_thermocline(Temp, depth=None, time=None, s=0.2, mixed_cutoff=1, Smin=0.1, seasonal_smoothed=True, smooth=False, weighted=True):
     '''
     Calculate depth of the thermocline from a temperature profile.
     
@@ -117,6 +123,8 @@ def seasonal_thermocline(Temp, depth=None, time=None, s=0.2, mixed_cutoff=1, Smi
     depth : array_like
         a numeric vector corresponding to the depth of the temperature.
         Depth is defined as positive, and is minimum at the surface. 
+    time : array_like, default: None
+        Profile timestamps. Sequential integers are used when omitted.
     s : array_like, default : 0.2
         Salinity of the water column in PSU
     mixed_cutoff : scalar, default: 1
@@ -132,6 +140,9 @@ def seasonal_thermocline(Temp, depth=None, time=None, s=0.2, mixed_cutoff=1, Smi
         depth length, order:3, method=nearest)
         Smoothing is recommended when the thermocline is located at a lower resolution 
         sensors (sensors can be more spaced at the thermocline, resulting in a bias).
+    weighted : bool, default: True
+        Refine thermocline depths between measurement depths. When False,
+        return the midpoint of the selected density-gradient interval.
     Returns 
     ----------
     thermoD: array_like
@@ -179,22 +190,11 @@ def seasonal_thermocline(Temp, depth=None, time=None, s=0.2, mixed_cutoff=1, Smi
         s=s,
         mixed_cutoff=mixed_cutoff,
         smooth=False,
+        weighted=weighted,
     )
 
-    def process_peaks(arr, Smin, thermoInd):
-        arr = arr.copy()
-
-        locs, _ = find_peaks(
-            arr,
-            height=Smin,
-        )
-        if len(locs) > 0:
-            return int(locs[-1])
-
-        return int(thermoInd)
-
     SthermoInd = xr.apply_ufunc(
-        process_peaks,
+        find_peak_index,
         drho_dz,
         Smin,
         thermoInd,
@@ -208,7 +208,7 @@ def seasonal_thermocline(Temp, depth=None, time=None, s=0.2, mixed_cutoff=1, Smi
         output_dtypes=[int],
     )
 
-    if Temp.sizes["depth"] == 3:
+    if Temp.sizes["depth"] == 3 or not weighted:
         SthermoD = (
             Temp.depth.isel(depth=SthermoInd)
             + Temp.depth.isel(depth=SthermoInd + 1)
@@ -275,6 +275,8 @@ def robust_thermocline(Temp, depth=None, time=None, s=0.2, mixed_cutoff=1):
         a numeric vector of water temperature in degrees C
     depth : array_like
         a numeric vector corresponding to the depth (in m) of the Temp
+    time : array_like, default: None
+        Profile timestamps. Sequential integers are used when omitted.
     s : array_like, default : 0.2
         Salinity of the water column in PSU
     mixed_cutoff : scalar, default: 1
@@ -399,6 +401,9 @@ def metalimnion(Temp, depth=None, slope=0.25, slope_calc="relative", seasonal=Fa
     slope : scalar, str, default: 0.1
         a numeric vector corresponding to the minimum slope. Can be set to "relative", if it's the case,
         the threshold will be 10% of the max slope density gradient.
+    slope_calc : {"relative", "absolute"}, default: "relative"
+        Interpret ``slope`` as a fraction of the maximum density gradient or
+        as an absolute density-gradient threshold.
     seasonal : bool, default: False
         Calculates the metalimnion based on the seasonal thermocline if set to True.
     mixed_cutoff : scalar, default: 1
@@ -698,6 +703,8 @@ def schmidt_stability(Temp, depth=None, time=None, bthA=None, bthD=None, sal = 0
         water temperature in degrees C
     depth:  array_like, default: None
         depth of the Temp measurements (m)
+    time: array_like, default: None
+        Profile timestamps. Sequential integers are used when omitted.
     bthA: array_like: 
         cross sectional areas (m**2) corresponding to bthD depth
     bthD: array_like
@@ -938,7 +945,7 @@ def Lake_number(bthA, bthD, ustar, St, metaT, metaB, averageHypoDense, g=9.81):
         a numeric vector of cross sectional areas (m2) corresponding to bthD depth, hypsographic areas
     bthD: array_like:
         a numeric vector of depth (m) which correspond to areal measures in bthA, hypsographic depth
-    uStar: array_like:
+    ustar: array_like:
         a numeric array of u* (m/s), water friction velocity due to wind stress
     St: array_like
         a numeric array of Schmidt stability (J/m2), as defined by Idso 1973
@@ -1177,6 +1184,13 @@ def water_vapor_pressure(T_C):
 def altitude_correction(altitude_m, T_C=15):
     """
     Altitude correction factor accounting for altitude and water vapor.
+
+    Parameters
+    ----------
+    altitude_m : float or array_like
+        Altitude above sea level in metres.
+    T_C : float or array_like, default: 15
+        Water temperature in degrees Celsius.
 
     Returns
     -------

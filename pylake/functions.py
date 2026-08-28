@@ -1,6 +1,7 @@
 import numpy as np
 import xarray as xr
 import warnings
+from scipy.signal import find_peaks
 
 
 def control(Temp, depths):
@@ -381,6 +382,32 @@ def weighted_method(depths, rho, z_idx):
 
     return weighted_depth
 
+
+def find_peak_index(values, min_height, fallback_index):
+    """Return the deepest peak above a threshold or a fallback index.
+
+    Parameters
+    ----------
+    values : array_like
+        One-dimensional density-gradient values.
+    min_height : float
+        Minimum accepted peak height.
+    fallback_index : int
+        Index returned when no qualifying peak exists.
+
+    Returns
+    -------
+    int
+        Index of the deepest qualifying peak.
+    """
+    values = np.asarray(values, dtype=float)
+    locations, _ = find_peaks(values, height=min_height)
+
+    if locations.size:
+        return int(locations[-1])
+
+    return int(fallback_index)
+
 def check_bathy(Temp, bthA, bthD, depth):
     """Align temperature and bathymetry depth ranges.
 
@@ -546,15 +573,17 @@ def set_nan(vec1, vec2):
     array_like
         ``vec2`` with missing values propagated from ``vec1``.
     """
-    NaN = np.isnan(vec1)
+    source = np.asarray(vec1)
+    target = np.asarray(vec2, dtype=float).copy()
+    missing = np.isnan(source)
 
-    if any(NaN):
-        if len(NaN) == 1:
-            vec2 = np.array([np.nan])
-        else:
-            vec2[NaN] = np.nan
+    if source.ndim == 0:
+        if bool(missing):
+            return np.nan
+        return vec2
 
-    return vec2
+    target[missing] = np.nan
+    return target
 
 
 def round_up_to_odd(f):
