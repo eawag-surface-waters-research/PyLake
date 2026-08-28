@@ -76,6 +76,38 @@ def test_thermocline_handles_multiple_profiles():
     np.testing.assert_array_equal(indices, [2, 2])
 
 
+def test_thermocline_uses_local_intervals_for_irregular_depths():
+    temperatures = np.array([21, 20.8, 20.4, 18, 12, 10, 9], dtype=float)
+    depths = np.array([0, 0.4, 1.3, 2.7, 4.8, 7.5, 10], dtype=float)
+
+    depth, index = pylake.thermocline(
+        temperatures,
+        depths,
+        weighted=True,
+    )
+
+    density = pylake.water_density(temperatures, 0.2)
+    gradient = np.diff(density) / np.diff(depths)
+    interval = int(np.argmax(gradient))
+    s_down = -(
+        depths[interval + 1] - depths[interval]
+    ) / (
+        gradient[interval + 1] - gradient[interval]
+    )
+    s_up = (
+        depths[interval] - depths[interval - 1]
+    ) / (
+        gradient[interval] - gradient[interval - 1]
+    )
+    expected = (
+        depths[interval + 1] * s_down
+        + depths[interval] * s_up
+    ) / (s_down + s_up)
+
+    assert depth == pytest.approx(expected)
+    assert index == 3
+
+
 def test_seasonal_thermocline_honors_unweighted_option():
     depth, _ = pylake.seasonal_thermocline(
         TEMP,
