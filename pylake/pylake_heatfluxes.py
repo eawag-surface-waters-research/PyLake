@@ -1,0 +1,168 @@
+import numpy as np
+import pandas as pd
+from pysolar.solar import get_altitude
+import warnings
+import xarray as xr
+from datetime import datetime, timezone
+from .functions import *
+from .functions_heat import *
+
+def calculate_cloud_cover(date, LON, LAT, ELEV, Q, T, Rh, P):
+    # Woolway 2015 procedure to calculate DAILY cloud cover using the Pysolar package to obtain Zenith
+    # The DOY calc and the daily-mean windowing below assume date is in
+    # ascending chronological order. We don't silently sort it ourselves -
+    # that risks desynchronising it from Q/T/Rh, which the caller must sort
+    # to match. Raise instead so out-of-order input is caught at the call
+    # site.
+    date = check_sorted(ensure_utc(date))
+
+    Zenit = np.full(len(date), np.nan)
+    DOY = np.full(len(date), np.nan)
+    for i in range(len(date)):
+        Zenit[i] = 90 - get_altitude(LAT, LON, date[i])  # , ELEV, T[i], P[i])
+        DOY[i] = (date[i] - datetime(date[i].year, 1, 1, tzinfo=timezone.utc)).total_seconds() / 24. / 60. / 60.
+        # CSRad[i] = solar.radiation.GetRadiationDirect(date[i],altitude)
+    # Effective solar constant: squared eccentricity-correction factor,
+    # matching Woolway et al. (2015)'s own implementation (calc_lwnet.m:
+    # I0 = 1353*cosN.*cosN where cosN = 1+0.034*cos(...)) - not the
+    # unsquared version this file had before.
+    Ieff = 1353 * (1 + 0.034 * np.cos(2 * np.pi * DOY / 365)) ** 2
+    Ieff[Ieff < 0] = 0.
+    cosZ = np.cos(np.pi / 180. * Zenit)
+    cosZ[cosZ < 0] = 0.
+
+    # Rayleigh scattering
+    p = (101325. * (1 - ELEV * 2.25577e-5) ** 5.25588) / 100.  # surface pressure
+    # air-mass thickness: the 1224 constant matches calc_lwnet.m
+    # (m1 = 1224*cosZ.^2+1) - this file previously had 1244.
+    m = 35. * cosZ * (1224. * cosZ ** 2 + 1) ** -0.5
+    TrTpg = 1.021 - 0.084 * (m * (0.000949 * p + 0.051)) ** 0.5
+
+    # Water vapour absortion. Td (dewpoint, deg C) follows the standard
+    # Magnus formula with no added offset - calc_lwnet.m's T_d has none
+    # either; this file previously added a spurious +33.8 here. The
+    # precipitable-water term (pw) needs Td in Fahrenheit
+    # (calc_lwnet.m: T_d = T_d*9/5+32 right before it's used) - this file
+    # previously used Td in Celsius directly, unconverted.
+    es = saturation_vapour_pressure(T)
+    ez = Rh * es / 100.
+    Td = (243.5 * np.log(ez / 6.112)) / (17.67 - np.log(ez / 6.112))
+    Td_F = Td * 9. / 5. + 32.
+    G = G_constant(DOY, LAT)
+    pw = np.exp((0.1133 - np.log(G + 1)) + 0.0393 * Td_F)
+    Tw = 1. - 0.077 * (pw * m) ** 0.3
+
+    # Aerosol attenuation (Meyers & Dale) - calc_lwnet.m uses 0.935, not
+    # the 0.95 this file previously had.
+    Ta = 0.935 ** m
+
+    # clear-sky irradiance
+    Ic = Ieff * cosZ * TrTpg * Tw * Ta
+
+    # calculates daily cloud cover using a time-based rolling mean: a +-12h
+    # window around each point (so midnight uses everything from the
+    # previous noon to the same day's noon), based on actual elapsed time
+    # rather than sample count, so gaps in the series widen the effective
+    # averaging window instead of silently covering more or less than a
+    # day's worth of real time.
+    #
+    # Only daytime samples feed the average - Ic is exactly 0 at night, so
+    # including nighttime rows would dilute (or, if a window is all-night,
+    # zero out) the mean. Masking them to NaN before rolling means
+    # pandas' rolling mean skips them and uses only the nearby daytime
+    # samples - which is what lets a *nighttime* point still get a
+    # meaningful cloud-cover value, from the daytime data in its window,
+    # instead of being undefined.
+    night = cosZ <= 0
+    Ic_day = np.where(night, np.nan, Ic)
+    Q_day = np.where(night, np.nan, np.asarray(Q, dtype=float))
+
+    rolled = pd.DataFrame(
+        {"Ic": Ic_day, "Q": Q_day}, index=date
+    ).rolling("1D", center=True, min_periods=1).mean()
+    mIc = rolled["Ic"].to_numpy()
+    mQ = rolled["Q"].to_numpy()
+
+    # percentage of clear sky radiation: an absolute ratio of measured to
+    # theoretical clear-sky irradiance, NOT rescaled relative to whatever
+    # else is in this dataset. csf == 1 means measured radiation equals the
+    # clear-sky model's prediction (0% cloud); csf == 0 means no radiation
+    # got through at all (100% cloud). mIc/mQ can still be NaN here if a
+    # window happens to contain no daytime samples at all (e.g. very sparse
+    # or polar-night data) - there's genuinely nothing to compute from in
+    # that case, so it stays NaN rather than being forced to a value.
+    with np.errstate(divide="ignore", invalid="ignore"):
+        csf = mQ / mIc
+    # measurement noise or clear-sky model underestimation can occasionally
+    # push the ratio slightly above 1 (or, less commonly given Q was
+    # clipped >= 0, below 0) - clip to keep it physically bounded rather
+    # than letting clf run negative or past 1. NaN passes through both
+    # comparisons unchanged, so night-with-no-data stays NaN.
+    csf = np.clip(csf, 0., 1.)
+    clf = 1 - csf
+
+    return clf
+
+def shortwave_radiation(date, Srad, cloud_cover, lat):
+    # albedo for absorbed short-wave from Fink et al. (2014) based on Cogley (1979)
+    date = check_sorted(ensure_utc(date))
+    albedo_diff = 0.066
+    albedo_dir_array = calculate_albedo_dir(lat)
+    print(albedo_dir)
+
+    # Direct and diffusive fraction based on cloud cover
+    Fdir = (1. - cloud_cover) / ((1. - cloud_cover) + 0.5 * cloud_cover)
+    Fdiff = 0.5 * cloud_cover / ((1. - cloud_cover) + 0.5 * cloud_cover)
+
+    month = np.zeros(len(self.date))
+    
+    SRad[SRad < 0.] = 0.
+
+    month[i] = d.month
+    month = month.astype(int)
+    albedo_dir = albedo_dir_array[month - 1] + (date.day + 15) * (albedo_dir_array[month] - albedo_dir_array[month - 1])/30
+    print(albedo_dir)
+    Qsw = SRad * (Fdir * (1. - albedo_dir) + Fdiff * (1. - albedo_diff))
+    return Qsw
+
+def longwave_Fink(self):
+    # constants for longwave
+    default_c["sigma"] = 5.67e-8  # W m-2 K-4
+    default_c["AL"] = 0.03
+    default_c["a"] = 1.0592
+    default_c["Cc"] = 0.17
+    # calculates absorbed and emitted long-wave radiation according to Fink
+    es = saturation_vapour_pressure(self.Ta)
+    ea = self.RH * es / 100.
+    Ea = self.a * (1 + self.Cc * self.C ** 2) * 1.24 * (ea / (self.Ta + 273.16)) ** (
+                1 / 7.)  # atmospheric emisivity
+    self.Qlw_in = - (1 - self.AL) * Ea * self.sigma * (self.Ta + 273.16) ** 4
+    # emited
+    self.Qlw_out = 0.972 * self.sigma * (self.Tw + 273.16) ** 4
+
+def latent_sensible_Fink(self):
+    # latent and sensible heat flux according to Fink
+    es = saturation_vapour_pressure(self.Ta)
+    ea = self.RH * es / 100.
+    esw = saturation_vapour_pressure(self.Tw)  # attention: it is with water temperature
+    f = 4.8 + 1.98 * self.Wsp + 0.28 * (self.Tw - self.Ta)
+    self.Qlat = f * (esw - ea)
+
+    # sensible
+    Lv = latent_heat_vap(self.Tw)
+    gamma = (self.Cpa * self.P) / (0.622 * Lv)
+    self.Qsen = gamma * f * (self.Tw - self.Ta)
+
+def windstress_wuest(self):
+    # calculates wind stress following Wuest 2003
+    print("Wind stress following Wuest 2003")
+    nt = len(self.date)
+    self.tau = np.full(nt, np.nan)
+    self.u10 = np.full(nt, np.nan)
+    self.Cd10 = np.full(nt, np.nan)
+    self.Cd10, self.u10 = self.__drag_coefficient_wuest__(self.Wsp, self.zu)
+    self.tau = self.rhoa * self.Cd10 * self.u10 ** 2
+    # friction velocity on air
+    self.us = (self.tau / self.rhoa) ** 0.5
+    # friction velocity on water
+    self.us_water = (self.tau / self.rhoa) ** 0.5
