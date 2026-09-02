@@ -195,3 +195,11 @@ def sensible(Ta, Tw, Wsp, P):
     gamma = (Cpa * P) / (0.622 * Lv)
     Qsen = -gamma * f * (Tw - Ta)
     return Qsen
+
+def net_heat_flux(Qsw, Qlw_in, Qlw_out, Qlat, Qsen):
+    # Net surface heat flux: the sum of the individual terms above.
+    # Sign convention: positive = heat flux INTO the lake (all five inputs
+    # already follow this convention - see shortwave_radiation, longwave_in,
+    # longwave_out, latent and sensible).
+    Qnet = Qsw + Qlw_in + Qlw_out + Qlat + Qsen
+    return Qnet
