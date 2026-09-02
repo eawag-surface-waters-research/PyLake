@@ -103,25 +103,45 @@ def calculate_cloud_cover(date, LON, LAT, ELEV, Q, T, Rh, P):
 
     return clf
 
-def shortwave_radiation(date, Srad, cloud_cover, lat):
+def shortwave_radiation(date, SRad, cloud_cover, lat):
     # albedo for absorbed short-wave from Fink et al. (2014) based on Cogley (1979)
     date = check_sorted(ensure_utc(date))
+    # Coerce to a plain array: callers sometimes pass a pandas Index (e.g. an
+    # array built via arithmetic on date.hour/date.minute keeps returning an
+    # Index all the way through), and Index objects are immutable so the
+    # boolean-mask assignment below would raise
+    # "TypeError: Index does not support mutable operations".
+    SRad = np.asarray(SRad, dtype=float)
     albedo_diff = 0.066
     albedo_dir_array = calculate_albedo_dir(lat)
-    print(albedo_dir)
 
     # Direct and diffusive fraction based on cloud cover
     Fdir = (1. - cloud_cover) / ((1. - cloud_cover) + 0.5 * cloud_cover)
     Fdiff = 0.5 * cloud_cover / ((1. - cloud_cover) + 0.5 * cloud_cover)
 
-    month = np.zeros(len(self.date))
-    
     SRad[SRad < 0.] = 0.
 
-    month[i] = d.month
-    month = month.astype(int)
-    albedo_dir = albedo_dir_array[month - 1] + (date.day + 15) * (albedo_dir_array[month] - albedo_dir_array[month - 1])/30
-    print(albedo_dir)
+    # Vectorized month-of-year (1-12) and day-of-month for every timestamp -
+    # `date` is a DatetimeIndex, so this replaces the old per-element loop
+    # that referenced an undefined `i`/`d`.
+    month = date.month.to_numpy()
+    day = date.day.to_numpy()
+
+    # Piecewise linear interpolation between the two nearest mid-month
+    # (day-15) climatological anchors - matches the two-segment reference
+    # scheme: days 1-15 interpolate between the previous and current
+    # month, days 16-31 interpolate between the current and next month.
+    # (Both segments meet exactly at day 15, which reproduces the current
+    # month's own table value.)
+    prev_month = np.where(month == 1, 12, month - 1)
+    next_month = np.where(month == 12, 1, month + 1)
+
+    before_16 = day < 16
+    albedo_start = np.where(before_16, albedo_dir_array[prev_month - 1], albedo_dir_array[month - 1])
+    albedo_end = np.where(before_16, albedo_dir_array[month - 1], albedo_dir_array[next_month - 1])
+    weight = np.where(before_16, day + 15, day - 15)
+    albedo_dir = albedo_start + weight * (albedo_end - albedo_start) / 30
+
     Qsw = SRad * (Fdir * (1. - albedo_dir) + Fdiff * (1. - albedo_diff))
     return Qsw
 
