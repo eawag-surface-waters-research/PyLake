@@ -18,7 +18,7 @@ setup(
     url='https://github.com/eawag-surface-waters-research/pylake',
     install_requires=[
         'numpy>=1.19.5',
-        'pandas>=1.1.5',
+        'pandas>=1.3.0',
         'PyYAML>=6.0',
         'scipy>=1.5.4',
         'dask>=2022.02.1',

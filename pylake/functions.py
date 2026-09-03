@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import xarray as xr
 import warnings 
 
@@ -168,3 +169,40 @@ def set_nan(vec1, vec2):
 
 def round_up_to_odd(f):
     return int(np.ceil(f) // 2 * 2 + 1)
+
+def ensure_utc(date):
+    """Return `date` as tz-aware UTC pandas Timestamps.
+
+    Raises a clear error on naive (timezone-unaware) input instead of
+    letting downstream code (e.g. pysolar) silently assume UTC, or letting
+    UTC-vs-naive arithmetic fail later with a confusing TypeError.
+    """
+    date = pd.to_datetime(date)
+    if date.tz is None:
+        raise ValueError(
+            "date/time input must be timezone-aware UTC, e.g. "
+            "pd.to_datetime(dates, utc=True). Got naive (timezone-unaware) "
+            "timestamps instead."
+        )
+    return date.tz_convert("UTC")
+
+
+def check_sorted(date):
+    """Raise if `date` is not strictly increasing (no duplicates either).
+
+    pylake_heatfluxes functions that take a timeseries assume ascending
+    chronological order (for day-of-year calculations and time-based
+    windowing). Rather than silently reordering the caller's data - which
+    also risks desynchronising it from parallel arrays like Q/T/Rh that the
+    caller didn't tell us to reorder - raise a clear error so out-of-order
+    or duplicate timestamps are caught at the call site instead of
+    producing silently wrong results downstream.
+    """
+    if len(date) > 1 and not (date[1:] - date[:-1] > pd.Timedelta(0)).all():
+        raise ValueError(
+            "date/time input must be sorted in strictly ascending order, "
+            "with no duplicate timestamps. Sort your dates (and any "
+            "per-timestamp data alongside them, e.g. via "
+            "pandas.DataFrame.sort_values) before calling this function."
+        )
+    return date
