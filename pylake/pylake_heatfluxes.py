@@ -103,66 +103,103 @@ def calculate_cloud_cover(date, LON, LAT, ELEV, Q, T, Rh, P):
 
     return clf
 
-def shortwave_radiation(date, Srad, cloud_cover, lat):
+def shortwave_radiation(date, SRad, cloud_cover, lat):
     # albedo for absorbed short-wave from Fink et al. (2014) based on Cogley (1979)
     date = check_sorted(ensure_utc(date))
+    # Coerce to a plain array: callers sometimes pass a pandas Index (e.g. an
+    # array built via arithmetic on date.hour/date.minute keeps returning an
+    # Index all the way through), and Index objects are immutable so the
+    # boolean-mask assignment below would raise
+    # "TypeError: Index does not support mutable operations".
+    SRad = np.asarray(SRad, dtype=float)
     albedo_diff = 0.066
     albedo_dir_array = calculate_albedo_dir(lat)
-    print(albedo_dir)
 
     # Direct and diffusive fraction based on cloud cover
     Fdir = (1. - cloud_cover) / ((1. - cloud_cover) + 0.5 * cloud_cover)
     Fdiff = 0.5 * cloud_cover / ((1. - cloud_cover) + 0.5 * cloud_cover)
 
-    month = np.zeros(len(self.date))
-    
     SRad[SRad < 0.] = 0.
 
-    month[i] = d.month
-    month = month.astype(int)
-    albedo_dir = albedo_dir_array[month - 1] + (date.day + 15) * (albedo_dir_array[month] - albedo_dir_array[month - 1])/30
-    print(albedo_dir)
+    # Vectorized month-of-year (1-12) and day-of-month for every timestamp -
+    # `date` is a DatetimeIndex, so this replaces the old per-element loop
+    # that referenced an undefined `i`/`d`.
+    month = date.month.to_numpy()
+    day = date.day.to_numpy()
+
+    # Piecewise linear interpolation between the two nearest mid-month
+    # (day-15) climatological anchors - matches the two-segment reference
+    # scheme: days 1-15 interpolate between the previous and current
+    # month, days 16-31 interpolate between the current and next month.
+    # (Both segments meet exactly at day 15, which reproduces the current
+    # month's own table value.)
+    prev_month = np.where(month == 1, 12, month - 1)
+    next_month = np.where(month == 12, 1, month + 1)
+
+    before_16 = day < 16
+    albedo_start = np.where(before_16, albedo_dir_array[prev_month - 1], albedo_dir_array[month - 1])
+    albedo_end = np.where(before_16, albedo_dir_array[month - 1], albedo_dir_array[next_month - 1])
+    weight = np.where(before_16, day + 15, day - 15)
+    albedo_dir = albedo_start + weight * (albedo_end - albedo_start) / 30
+
     Qsw = SRad * (Fdir * (1. - albedo_dir) + Fdiff * (1. - albedo_diff))
     return Qsw
 
-def longwave_Fink(self):
-    # constants for longwave
-    default_c["sigma"] = 5.67e-8  # W m-2 K-4
-    default_c["AL"] = 0.03
-    default_c["a"] = 1.0592
-    default_c["Cc"] = 0.17
-    # calculates absorbed and emitted long-wave radiation according to Fink
-    es = saturation_vapour_pressure(self.Ta)
-    ea = self.RH * es / 100.
-    Ea = self.a * (1 + self.Cc * self.C ** 2) * 1.24 * (ea / (self.Ta + 273.16)) ** (
-                1 / 7.)  # atmospheric emisivity
-    self.Qlw_in = - (1 - self.AL) * Ea * self.sigma * (self.Ta + 273.16) ** 4
-    # emited
-    self.Qlw_out = 0.972 * self.sigma * (self.Tw + 273.16) ** 4
+def longwave_in(Ta, RH, C):
+    # Absorbed atmospheric long-wave radiation, following Fink et al.
+    # Sign convention: positive = heat flux INTO the lake (this term is
+    # always a gain, so it is always >= 0) - matches shortwave_radiation's
+    # Qsw and longwave_out's sign convention below.
+    sigma = 5.67e-8  # Stefan-Boltzmann constant, W m-2 K-4
+    AL = 0.03        # long-wave surface albedo
+    a = 1.0592
+    Cc = 0.17
 
-def latent_sensible_Fink(self):
-    # latent and sensible heat flux according to Fink
-    es = saturation_vapour_pressure(self.Ta)
-    ea = self.RH * es / 100.
-    esw = saturation_vapour_pressure(self.Tw)  # attention: it is with water temperature
-    f = 4.8 + 1.98 * self.Wsp + 0.28 * (self.Tw - self.Ta)
-    self.Qlat = f * (esw - ea)
+    es = saturation_vapour_pressure(Ta)
+    ea = RH * es / 100.
+    Ea = a * (1 + Cc * C ** 2) * 1.24 * (ea / (Ta + 273.16)) ** (1 / 7.)  # atmospheric emissivity
+    Qlw_in = (1 - AL) * Ea * sigma * (Ta + 273.16) ** 4
+    return Qlw_in
 
-    # sensible
-    Lv = latent_heat_vap(self.Tw)
-    gamma = (self.Cpa * self.P) / (0.622 * Lv)
-    self.Qsen = gamma * f * (self.Tw - self.Ta)
+def longwave_out(Tw):
+    # Emitted long-wave radiation from the water surface, following Fink et al.
+    # Sign convention: positive = heat flux INTO the lake, so emission (a
+    # loss) is returned negative (this term is always a loss, so always <= 0).
+    sigma = 5.67e-8  # Stefan-Boltzmann constant, W m-2 K-4
+    Qlw_out = -0.972 * sigma * (Tw + 273.16) ** 4
+    return Qlw_out
 
-def windstress_wuest(self):
-    # calculates wind stress following Wuest 2003
-    print("Wind stress following Wuest 2003")
-    nt = len(self.date)
-    self.tau = np.full(nt, np.nan)
-    self.u10 = np.full(nt, np.nan)
-    self.Cd10 = np.full(nt, np.nan)
-    self.Cd10, self.u10 = self.__drag_coefficient_wuest__(self.Wsp, self.zu)
-    self.tau = self.rhoa * self.Cd10 * self.u10 ** 2
-    # friction velocity on air
-    self.us = (self.tau / self.rhoa) ** 0.5
-    # friction velocity on water
-    self.us_water = (self.tau / self.rhoa) ** 0.5
+def latent(Ta, RH, Tw, Wsp):
+    # Latent (evaporative) heat flux, following Fink et al.
+    # Sign convention: positive = heat flux INTO the lake, so evaporation
+    # (esw > ea, the usual case) comes out negative (a loss).
+    es = saturation_vapour_pressure(Ta)
+    ea = RH * es / 100.
+    esw = saturation_vapour_pressure(Tw)  # attention: it is with water temperature
+    f = 4.8 + 1.98 * Wsp + 0.28 * (Tw - Ta)
+    Qlat = -f * (esw - ea)
+    return Qlat
+
+def sensible(Ta, Tw, Wsp, P):
+    # Sensible heat flux, following Fink et al.
+    # Sign convention: positive = heat flux INTO the lake, so a warmer
+    # water surface than air (Tw > Ta, the usual case) comes out negative
+    # (a loss).
+    # P: air pressure [mbar/hPa], consistent with the mbar/hPa convention
+    # used throughout this module (e.g. calculate_cloud_cover's P).
+    Cpa = 1005.0  # specific heat of air at constant pressure [J kg-1 K-1] -
+                  # not given in the original formula, using the standard
+                  # dry-air value.
+    f = 4.8 + 1.98 * Wsp + 0.28 * (Tw - Ta)
+    Lv = latent_heat_vap(Tw)
+    gamma = (Cpa * P) / (0.622 * Lv)
+    Qsen = -gamma * f * (Tw - Ta)
+    return Qsen
+
+def net_heat_flux(Qsw, Qlw_in, Qlw_out, Qlat, Qsen):
+    # Net surface heat flux: the sum of the individual terms above.
+    # Sign convention: positive = heat flux INTO the lake (all five inputs
+    # already follow this convention - see shortwave_radiation, longwave_in,
+    # longwave_out, latent and sensible).
+    Qnet = Qsw + Qlw_in + Qlw_out + Qlat + Qsen
+    return Qnet
