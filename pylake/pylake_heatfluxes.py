@@ -7,8 +7,10 @@ from datetime import datetime, timezone
 from .functions import *
 from .functions_heat import *
 
-def calculate_cloud_cover(date, LON, LAT, ELEV, Q, T, Rh, P):
+def calculate_cloud_cover(date, LON, LAT, ELEV, Q, T, Rh, P=None):
     # Woolway 2015 procedure to calculate DAILY cloud cover using the Pysolar package to obtain Zenith
+    # Inputs: Q measured global radiation [W m-2], T air temperature [degC], Rh relative
+    # humidity [%], P air pressure [hPa] (if None: estimated from the elevation ELEV [m])
     # The DOY calc and the daily-mean windowing below assume date is in
     # ascending chronological order. We don't silently sort it ourselves -
     # that risks desynchronising it from Q/T/Rh, which the caller must sort
@@ -31,22 +33,26 @@ def calculate_cloud_cover(date, LON, LAT, ELEV, Q, T, Rh, P):
     cosZ = np.cos(np.pi / 180. * Zenit)
     cosZ[cosZ < 0] = 0.
 
-    # Rayleigh scattering
-    p = (101325. * (1 - ELEV * 2.25577e-5) ** 5.25588) / 100.  # surface pressure
-    # air-mass thickness: the 1224 constant matches calc_lwnet.m
-    # (m1 = 1224*cosZ.^2+1) - this file previously had 1244.
-    m = 35. * cosZ * (1224. * cosZ ** 2 + 1) ** -0.5
+    # Rayleigh scattering. Surface pressure [hPa]: measured (as calc_lwnet.m, p = pressure),
+    # or estimated from the elevation if no pressure is given
+    if P is None:
+        p = (101325. * (1 - ELEV * 2.25577e-5) ** 5.25588) / 100.
+    else:
+        p = np.asarray(P, dtype=float)
+    # optical air mass, as calc_lwnet.m (m1 = 1224*cosZ.^2+1; m = 35*m1.^-.5): 1 with the sun
+    # in the zenith, ~1/cosZ for moderate zenith angles, 35 at the horizon. (This file
+    # previously had an extra factor cosZ, which kept m at ~1 for every sun position and
+    # overestimated the clear-sky irradiance at low sun, e.g. by ~20 % at a winter noon at 47 N.)
+    m = 35. * (1224. * cosZ ** 2 + 1) ** -0.5
     TrTpg = 1.021 - 0.084 * (m * (0.000949 * p + 0.051)) ** 0.5
 
-    # Water vapour absortion. Td (dewpoint, deg C) follows the standard
-    # Magnus formula with no added offset - calc_lwnet.m's T_d has none
-    # either; this file previously added a spurious +33.8 here. The
+    # Water vapour absortion. Td (dewpoint, deg C): inverse of the Magnus formula used in
+    # saturation_vapour_pressure (so that es(Td) = actual vapour pressure). The
     # precipitable-water term (pw) needs Td in Fahrenheit
-    # (calc_lwnet.m: T_d = T_d*9/5+32 right before it's used) - this file
-    # previously used Td in Celsius directly, unconverted.
+    # (calc_lwnet.m: T_d = T_d*9/5+32 right before it's used).
     es = saturation_vapour_pressure(T)
     ez = Rh * es / 100.
-    Td = (243.5 * np.log(ez / 6.112)) / (17.67 - np.log(ez / 6.112))
+    Td = dew_point(ez)
     Td_F = Td * 9. / 5. + 32.
     G = G_constant(DOY, LAT)
     pw = np.exp((0.1133 - np.log(G + 1)) + 0.0393 * Td_F)
@@ -111,7 +117,9 @@ def shortwave_radiation(date, SRad, cloud_cover, lat):
     # Index all the way through), and Index objects are immutable so the
     # boolean-mask assignment below would raise
     # "TypeError: Index does not support mutable operations".
-    SRad = np.asarray(SRad, dtype=float)
+    # (a copy: the negative values are set to 0 below without changing the caller's array, which
+    # may also be read-only, e.g. DataFrame.values with pandas copy-on-write)
+    SRad = np.array(SRad, dtype=float)
     albedo_diff = 0.066
     albedo_dir_array = calculate_albedo_dir(lat)
 
@@ -150,15 +158,16 @@ def longwave_in(Ta, RH, C):
     # Sign convention: positive = heat flux INTO the lake (this term is
     # always a gain, so it is always >= 0) - matches shortwave_radiation's
     # Qsw and longwave_out's sign convention below.
+    # Ta air temperature [degC], RH relative humidity [%], C cloud cover [0-1]
     sigma = 5.67e-8  # Stefan-Boltzmann constant, W m-2 K-4
     AL = 0.03        # long-wave surface albedo
-    a = 1.0592
+    a = 1.0592       # empirical (lake-specific) correction factor of the atmospheric emissivity
     Cc = 0.17
 
     es = saturation_vapour_pressure(Ta)
     ea = RH * es / 100.
-    Ea = a * (1 + Cc * C ** 2) * 1.24 * (ea / (Ta + 273.16)) ** (1 / 7.)  # atmospheric emissivity
-    Qlw_in = (1 - AL) * Ea * sigma * (Ta + 273.16) ** 4
+    Ea = a * (1 + Cc * C ** 2) * 1.24 * (ea / (Ta + 273.15)) ** (1 / 7.)  # atmospheric emissivity
+    Qlw_in = (1 - AL) * Ea * sigma * (Ta + 273.15) ** 4
     return Qlw_in
 
 def longwave_out(Tw):
@@ -166,17 +175,18 @@ def longwave_out(Tw):
     # Sign convention: positive = heat flux INTO the lake, so emission (a
     # loss) is returned negative (this term is always a loss, so always <= 0).
     sigma = 5.67e-8  # Stefan-Boltzmann constant, W m-2 K-4
-    Qlw_out = -0.972 * sigma * (Tw + 273.16) ** 4
+    Qlw_out = -0.972 * sigma * (Tw + 273.15) ** 4
     return Qlw_out
 
 def latent(Ta, RH, Tw, Wsp):
     # Latent (evaporative) heat flux, following Fink et al.
     # Sign convention: positive = heat flux INTO the lake, so evaporation
     # (esw > ea, the usual case) comes out negative (a loss).
+    # Wsp: wind speed at 10 m above the lake [m s-1]
     es = saturation_vapour_pressure(Ta)
     ea = RH * es / 100.
     esw = saturation_vapour_pressure(Tw)  # attention: it is with water temperature
-    f = 4.8 + 1.98 * Wsp + 0.28 * (Tw - Ta)
+    f = wind_function(Wsp, Tw, Ta)
     Qlat = -f * (esw - ea)
     return Qlat
 
@@ -190,7 +200,8 @@ def sensible(Ta, Tw, Wsp, P):
     Cpa = 1005.0  # specific heat of air at constant pressure [J kg-1 K-1] -
                   # not given in the original formula, using the standard
                   # dry-air value.
-    f = 4.8 + 1.98 * Wsp + 0.28 * (Tw - Ta)
+    # Wsp: wind speed at 10 m above the lake [m s-1]
+    f = wind_function(Wsp, Tw, Ta)
     Lv = latent_heat_vap(Tw)
     gamma = (Cpa * P) / (0.622 * Lv)
     Qsen = -gamma * f * (Tw - Ta)

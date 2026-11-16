@@ -12,7 +12,8 @@ _G_DOY = np.array([-10., 81., 173., 264., 355., 446.])
 _G_TABLE = np.array([
     [3.37, 2.85, 2.80, 2.64, 3.37, 2.85],
     [2.99, 3.02, 2.70, 2.93, 2.99, 3.02],
-    [3.60, 3.00, 2.98, 2.93, 3.60, 2.98],
+    [3.60, 3.00, 2.98, 2.93, 3.60, 3.00],   # last value: 2.98 in calc_lwnet.m, a typo (the
+                                            # repeated spring value must equal column 2)
     [3.04, 3.11, 2.92, 2.94, 3.04, 3.11],
     [2.70, 2.95, 2.77, 2.71, 2.70, 2.95],
     [2.52, 3.07, 2.67, 2.93, 2.52, 3.07],
@@ -25,8 +26,13 @@ _G_INTERPOLATOR = RegularGridInterpolator(
 )
 
 def G_constant(DOY, LAT):
+    # As getSmithGamma in calc_lwnet.m: southern hemisphere = northern hemisphere shifted by
+    # 182 days (seasons) with |lat|; latitudes outside the table (5-85 deg) use the nearest band
+    # instead of being extrapolated linearly
     DOY = np.asarray(DOY, dtype=float)
     LAT = np.broadcast_to(np.asarray(LAT, dtype=float), DOY.shape)
+    DOY = np.where(LAT < 0, (DOY + 182.) % 365., DOY)
+    LAT = np.clip(np.abs(LAT), _G_LAT[0], _G_LAT[-1])
     return _G_INTERPOLATOR(np.column_stack([LAT, DOY]))
 
 def saturation_vapour_pressure(T):
@@ -37,6 +43,18 @@ def saturation_vapour_pressure(T):
     # es: saturation vapour pressure (mbar/hPa)
     es = 6.11 * np.exp((17.27 * T) / (237.3 + T))
     return es
+
+def dew_point(e):
+    # Dew point [degC] from the vapour pressure e [hPa]: inverse of saturation_vapour_pressure
+    x = np.log(e / 6.11)
+    return 237.3 * x / (17.27 - x)
+
+def wind_function(Wsp, Tw, Ta):
+    # Wind function f(u) [W m-2 hPa-1] of the latent and sensible heat flux (Fink et al. 2014):
+    # f = 4.8 + 1.98 u10 + 0.28 (Tw - Ta). Limited to >= 0: with calm wind and air much warmer
+    # than the water (Tw - Ta < about -17 degC) the formula would turn negative and reverse
+    # the direction of both fluxes.
+    return np.maximum(4.8 + 1.98 * Wsp + 0.28 * (Tw - Ta), 0.)
 
 def latent_heat_vap(T):
     # latent heat of vaporiyation.
@@ -49,20 +67,18 @@ def latent_heat_vap(T):
 
 def calculate_albedo_dir(lat):
     """
-    Initialize monthly albedo data and latitude band number.
+    Monthly albedo of the water surface for direct short-wave radiation (Cogley 1979),
+    for the 10-degree latitude band of `lat`.
 
     Parameters
     ----------
     lat : float
-        Latitude in degrees.
+        Latitude in degrees (negative: southern hemisphere).
 
     Returns
     -------
-    albedo_data : np.ndarray
-        Array of shape (9, 12) containing monthly albedo values.
-        Row 0 corresponds to latitude band 1.
-    lat_number : int
-        Latitude band number (1-9).
+    albedo : np.ndarray
+        12 monthly values (January to December).
     """
 
     # Northern hemisphere
