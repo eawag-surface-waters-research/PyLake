@@ -513,6 +513,22 @@ def wedderburn(delta_rho, metaT, uSt, AvHyp_rho, Lo=False, Ao=False, g=9.81):
     W = go*metaT**2/(uSt**2*Lo)
     return W 
 
+def _layers(z0, z1, dz):
+    '''Midpoints and thickness of layers that exactly fill [z0, z1] with a thickness close to dz.'''
+    if z1 <= z0:
+        raise ValueError("the bottom of the layer must be deeper than the top")
+    n = max(int(np.ceil((z1 - z0) / dz - 1e-9)), 1)
+    dz_eff = (z1 - z0) / n
+    return z0 + dz_eff * (np.arange(n) + 0.5), dz_eff
+
+
+def _bathymetry(bthA, bthD):
+    '''Bathymetry as float arrays sorted by depth.'''
+    bthA, bthD = np.asarray(bthA, dtype=float), np.asarray(bthD, dtype=float)
+    order = np.argsort(bthD)
+    return bthA[order], bthD[order]
+
+
 def schmidt_stability(Temp, depth=None, time=None, bthA=None, bthD=None, sal = 0.2, g=9.81, dz=0.1):
     '''
     Schmidt stability, or the resistance to mechanical mixing due to the potential energy inherent in the stratification of the water column.
@@ -533,9 +549,11 @@ def schmidt_stability(Temp, depth=None, time=None, bthA=None, bthD=None, sal = 0
         gravity acceleration (m/s2)
     dz: scalar, default: 0.1
         depth resolution for the integral calculus
-    NaN_interp: bool, defaults : False
-        If NaN_interp=True, it will perform a linear interpolation to replace NaN values
-        The Schmidt stability calculation perform poorly if NaN are present.
+
+    Gaps (NaN) inside a profile are interpolated linearly in depth; missing values at the top or
+    bottom of the profile give NaN. The integral runs from the shallowest to the deepest depth of
+    Temp (layer midpoints) and is divided by the area at the shallowest depth (interpolated from
+    the bathymetry, which may be given on any depth axis).
     
     Returns
     ----------
@@ -547,42 +565,41 @@ def schmidt_stability(Temp, depth=None, time=None, bthA=None, bthD=None, sal = 0
     ...    bthD	=	np.array([0,2.3,2.5,4.2,5.8,7]) 
     ...    wtr	=	np.array([28,27,26.4,26,25.4,24,23.3])
     ...    depth=   np.array([0,1,2,3,4,5,6])  
-    ...    pylake.schmidt_stability(wtr, depth, bthA, bthD, sal=.2, g=self.g)
-    array([21.20261732])
+    ...    pylake.schmidt_stability(wtr, depth, bthA=bthA, bthD=bthD, sal=.2)
+    20.77
 
     equation
     ----------
-    g/A0 int(0,zmax, (zv-z)(rho_i-rho_v)A(z)dz)
+    g/A0 int(z0, zmax, (z-zv) rho(z) A(z) dz),   zv = centre of volume
+    (equivalent to g/A0 int((z-zv)(rho(z)-rho_v) A(z) dz), because int((z-zv) A(z) dz) = 0)
 
     '''
     Temp, depth = to_xarray(Temp, depth, time)
-    Temp  = Temp.interpolate_na(dim='depth')
+    Temp = Temp.sortby("depth").interpolate_na(dim='depth')
+    bthA, bthD = _bathymetry(bthA, bthD)
 
-    z0 = np.min(depth)
-    I0 = np.argmin(depth)
-    A0 = bthA[I0]
-    rhoL = water_density(Temp,sal)
-    
-    layerD = np.arange(z0, np.max(depth),dz)
-    layerP = rhoL.interp(depth=layerD)
-    layers = layerP.copy()
+    z0, z1 = float(np.min(depth)), float(np.max(depth))
+    layerD, dz_eff = _layers(z0, z1, dz)
     layerA = np.interp(layerD, bthD, bthA)
-    layers["A"]=('depth', layerA)
-    layers["D"] = layers.depth
-    layers["P"] = layerP
-    Zcv = (layers["D"]@layers["A"])/layers["A"].sum()
-    right_side = ((layers["D"]-Zcv) * layers["A"]) * dz * g / A0
-    St = layers["P"]@right_side
+    A0 = float(np.interp(z0, bthD, bthA))
+    if A0 <= 0:
+        raise ValueError("surface area cannot be zero, check bathymetric file")
+
+    layerP = water_density(Temp, sal).interp(depth=layerD)
+    Zcv = np.sum(layerD * layerA) / np.sum(layerA)            # centre of volume
+    w = xr.DataArray((layerD - Zcv) * layerA * dz_eff * g / A0, coords={"depth": layerD}, dims="depth")
+    St = (layerP * w).sum("depth", skipna=False)
     if St.size == 1:
         St = St.values.item()
     return St 
 
-def heat_content(Temp, bthA, bthD, depth=None, s=0.2):
+def heat_content(Temp, bthA, bthD, depth=None, s=0.2, time=None, dz=0.1):
     '''
     Calculates the heat content of the water column with temperature and hypsography
     Heat content is the thermal energy in the water column, which is
     calculated by multiplying the specific heat of water (J kg-1 K-1) by the
-    temperature and mass of the water in the lake.
+    temperature and mass of the water in the lake, divided by the area at the
+    shallowest depth (relative to 0 degC).
 
     Parameters
     -----------
@@ -590,10 +607,20 @@ def heat_content(Temp, bthA, bthD, depth=None, s=0.2):
         water temperature in degrees C
     depth: array_like:
         depth (in m) of the Temp measurements
-    bthA: array_like:
+    bthA: array_like: 
         cross sectional areas (m^2) corresponding to bthD depth
     bthD array_like:
         depth (m) which correspond to areal measures in bthA
+    s: scalar, array_like, default: 0.2
+        salinity (PSU) for the density
+    time: array_like, default: None
+        times of the profiles (2D input only)
+    dz: scalar, default: 0.1
+        layer thickness (m) for the integration
+
+    Computed with content() (C = cw * rho * T): layer midpoints from the shallowest to the deepest
+    depth of Temp, divided by the area at the shallowest depth. Gaps (NaN) inside a profile are
+    interpolated linearly in depth; missing values at the top or bottom of the profile give NaN.
 
     Returns
     ---------
@@ -606,36 +633,12 @@ def heat_content(Temp, bthA, bthD, depth=None, s=0.2):
     ...    bthD=np.array([0,2.3,2.5,4.2,5.8,7])
     ...    wtr	=np.array([28,27,26.4,26,25.4,24,23.3])
     ...    depth	= np.array([0,1,2,3,4,5,6])
-    ...    lw.internal_energy(wtr, depth, bthA, bthD, s=0.2)
-    ...    520423172.7994813
+    ...    pylake.heat_content(wtr, bthA, bthD, depth=depth, s=0.2)
+    ...    505946464
     '''
-    dz = 0.1
     cw = 4186
-    Temp,depth = to_xarray(Temp, depth)
-    #Temp, bthA, bthD, depth = check_bathy(Temp, bthA, bthD, depth)
-    
-    Zo = min(depth)
-    Io = np.argmin(depth)
-    Ao = bthA[Io]
-
-    if Ao==0:
-        print("surface area cannot be zero, check bathymetric file")
-    
-    rhoL = water_density(Temp,s)
-    layerD = np.arange(Zo, np.max(depth),dz)
-    layerP = rhoL.interp(depth=layerD)
-    layerT = Temp.interp(depth=layerD)
-    layerA = np.interp(layerD, bthD, bthA)
-    layerP["layerA"] = ('depth', layerA)
-
-    v_i = layerP["layerA"]*dz
-    m_i = layerP*v_i
-    u_i = layerT*m_i*cw
-
-    U = u_i.sum('depth')/layerA[0]
-    if U.size == 1:
-        U = U.values.item()
-    return U 
+    Temp, depth = to_xarray(Temp, depth, time)
+    return content(cw * water_density(Temp, s) * Temp, bthA, bthD, dz=dz)
 
 
 def content(C, bthA, bthD, depth=None, time=None, depth_range=None, per_area=True, mean=False,
@@ -704,9 +707,7 @@ def content(C, bthA, bthD, depth=None, time=None, depth_range=None, per_area=Tru
     '''
     C, depth = to_xarray(C, depth, time)
     C = C.sortby("depth")
-    bthA, bthD = np.asarray(bthA, dtype=float), np.asarray(bthD, dtype=float)
-    order = np.argsort(bthD)
-    bthA, bthD = bthA[order], bthD[order]
+    bthA, bthD = _bathymetry(bthA, bthD)
 
     C = C.interpolate_na(dim="depth")                         # gaps inside the profile
     if extrapolate:
@@ -714,11 +715,7 @@ def content(C, bthA, bthD, depth=None, time=None, depth_range=None, per_area=Tru
         C = C.interpolate_na(dim="depth", method="nearest", fill_value="extrapolate")
 
     z0, z1 = (float(np.min(depth)), float(np.max(depth))) if depth_range is None else map(float, depth_range)
-    if z1 <= z0:
-        raise ValueError("depth_range: the bottom must be deeper than the top")
-    n = max(int(np.ceil((z1 - z0) / dz - 1e-9)), 1)
-    dz_eff = (z1 - z0) / n
-    layerD = z0 + dz_eff * (np.arange(n) + 0.5)               # layer midpoints
+    layerD, dz_eff = _layers(z0, z1, dz)                      # layer midpoints
     layerA = np.interp(layerD, bthD, bthA)
     if extrapolate:                                           # depth_range beyond the data
         layerC = C.interp(depth=np.clip(layerD, float(C.depth.min()), float(C.depth.max())))
