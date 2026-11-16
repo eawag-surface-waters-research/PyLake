@@ -17,8 +17,15 @@ def control(Temp, depths):
     else:
         return 1
 
+def as_array(x):
+    '''Lists and tuples as float numpy arrays; anything else (scalars, arrays, xarray) unchanged.'''
+    if isinstance(x, (list, tuple)):
+        return np.asarray(x, dtype=float)
+    return x
+
 def to_xarray(Temp, depths, time=None):
-    if (type(Temp)==np.ndarray)or(type(Temp)==list):
+    Temp, depths = as_array(Temp), as_array(depths)
+    if type(Temp)==np.ndarray:
         Temp = format_Temp(depths, Temp)
         if time is not None:
             coords = {'time':time,'depth':depths}
