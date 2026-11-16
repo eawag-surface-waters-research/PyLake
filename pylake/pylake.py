@@ -999,6 +999,7 @@ def oxygen_solubility(T, saturation=100):
         Oxygen concentration in mg/L corresponding to the given saturation.
         If saturation=100, this is the solubility at equilibrium with air.
     """
+    T, saturation = as_array(T), as_array(saturation)
     T_K = T + 273.15
     # Benson & Krause formula (logarithm of solubility)
     ln_O2 = (-139.34411 + 1.575701e5/T_K
@@ -1129,7 +1130,7 @@ def water_density(T,S=0.2):
     density : float or array (same dimension as T and S)
         lake water density (kg m-3) 
     """    
-
+    T, S = as_array(T), as_array(S)
     density = 1e3 * (
                     0.9998395 + 6.7914e-5 * T - 9.0894e-6 * T ** 2 + 1.0171e-7 * T ** 3 -
                     1.2846e-9 * T ** 4 + 1.1592e-11 * T ** 5 - 5.0125e-14 * T ** 6 + (
@@ -1152,7 +1153,7 @@ def cp(T):
     cp : float or array (same dimension as T)
         specific heat coefficient (J kg-1 K-1) 
     """    
-
+    T = as_array(T)
     cp = (4.2174 - 3.6608e-3*T + 1.3129e-4*T**2 - 2.210e-6*T**3 + 1.508e-8*T**4)*1e3
 
     return cp
@@ -1172,7 +1173,7 @@ def alpha(T):
     alpha : float or array (same dimension as T)
         thermal expansion coefficient (K-1) 
     """    
-
+    T = as_array(T)
     alpha = (-68.00 + 18.2091*T - 0.30866*T**2 + 5.3445e-3*T**3 - 6.0721e-5*T**4 + 3.1441e-7*T**5)*1e-6
 
     return alpha
