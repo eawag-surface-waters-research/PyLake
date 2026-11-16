@@ -22,8 +22,9 @@ setup(
         'PyYAML>=6.0',
         'scipy>=1.5.4',
         'dask>=2022.02.1',
-        'xarray>=0.19.0',   
-        'seawater>=3.3.4'
+        'xarray>=0.19.0',
+        'gsw>=3.6.0',
+        'pysolar>=0.13'
     ],
     license="MIT",
     keywords=['python', 'pylake', 'Lake analyzer', 'environmental data', 'Physical properties'],

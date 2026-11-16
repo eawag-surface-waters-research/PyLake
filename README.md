@@ -14,11 +14,13 @@ Implemented methods:
 * Wedderburn Number
 * Schmidt stability
 * Heat content
+* Content of dissolved substances (e.g. salt, oxygen): per lake area, total or volume-weighted mean
 * Seiche periode
 * Lake Number
 * Brunt-Vaisala frequency
 * Average layer temperature
 * Monin-Obhukov 
+* Surface heat fluxes: cloud cover from measured global radiation (Woolway et al. 2015), absorbed short-wave radiation, long-wave radiation, latent and sensible heat flux (Fink et al. 2014), net heat flux
 
 ## Installation
 
