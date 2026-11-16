@@ -638,6 +638,110 @@ def heat_content(Temp, bthA, bthD, depth=None, s=0.2):
     return U 
 
 
+def content(C, bthA, bthD, depth=None, time=None, depth_range=None, per_area=True, mean=False,
+            A_ref=None, dz=0.1, extrapolate=False):
+    '''
+    Content of a dissolved quantity (e.g. salt, oxygen, nutrients) in the lake, from a
+    concentration profile and the hypsography (same approach as heat_content).
+
+    The profile is interpolated onto layers of thickness ~dz and every layer is weighted with
+    its area A(z), i.e. its volume A(z)*dz:
+
+        total content     M = sum( C(z) * A(z) * dz )             (per_area=False)
+        content per area  M / A_ref                                (per_area=True, default)
+        mean conc.        M / sum( A(z) * dz )                     (mean=True)
+
+    The function does not convert units: with C in g m-3 (= mg L-1) the result is in g m-2
+    (per area), g (total) or g m-3 (mean). Salinity in g kg-1 is approximately kg m-3 in
+    fresh water, which gives kg m-2 / kg / kg m-3.
+
+    Parameters
+    -----------
+    C: array_like, xarray
+        concentration profile(s): 1D (depth) or 2D (time x depth or depth x time), or an
+        xarray DataArray with a "depth" dimension
+    bthA: array_like
+        cross sectional areas (m2) corresponding to bthD
+    bthD: array_like
+        depths (m) corresponding to bthA
+    depth: array_like, default: None
+        depths (m) of the C values. Necessary if C is not an xarray
+    time: array_like, default: None
+        times of the profiles (2D input only)
+    depth_range: (float, float), default: None
+        top and bottom (m) of the layer to integrate, e.g. (15, 79) for the hypolimnion.
+        Default: from the shallowest to the deepest depth of C
+    per_area: bool, default: True
+        divide the content by the reference area A_ref (as heat_content, which gives J m-2)
+    mean: bool, default: False
+        return the volume-weighted mean concentration instead of the content
+    A_ref: float, default: None
+        reference area (m2) for per_area. Default: area at the top of the integrated layer,
+        i.e. at the shallowest depth of C, as in heat_content. Use bthA at 0 m for the lake
+        surface area
+    dz: float, default: 0.1
+        layer thickness (m) for the integration (adjusted slightly so that the layers exactly
+        fill depth_range)
+    extrapolate: bool, default: False
+        gaps (NaN) inside a profile are always interpolated linearly in depth. Missing values at
+        the top or bottom of a profile (or a depth_range beyond the data) give NaN, unless
+        extrapolate=True, which uses the nearest valid value of the profile there
+
+    Returns
+    -----------
+    content: float or xarray.DataArray
+        content per area, total content or mean concentration (one value per profile)
+
+    Examples
+    -----------
+    >>> bthA = np.array([1000, 900, 864, 820, 200, 10])
+    ... bthD = np.array([0, 2.3, 2.5, 4.2, 5.8, 7])
+    ... oxy = np.array([10, 10, 9.5, 9, 7, 5, 3])            # g m-3
+    ... depth = np.array([0, 1, 2, 3, 4, 5, 6])
+    ... pylake.content(oxy, bthA, bthD, depth=depth)                   # g m-2
+    ... pylake.content(oxy, bthA, bthD, depth=depth, per_area=False)   # g
+    ... pylake.content(oxy, bthA, bthD, depth=depth, mean=True)        # g m-3
+    '''
+    C, depth = to_xarray(C, depth, time)
+    C = C.sortby("depth")
+    bthA, bthD = np.asarray(bthA, dtype=float), np.asarray(bthD, dtype=float)
+    order = np.argsort(bthD)
+    bthA, bthD = bthA[order], bthD[order]
+
+    C = C.interpolate_na(dim="depth")                         # gaps inside the profile
+    if extrapolate:
+        # nearest valid value at the top / bottom (interior gaps are already filled linearly)
+        C = C.interpolate_na(dim="depth", method="nearest", fill_value="extrapolate")
+
+    z0, z1 = (float(np.min(depth)), float(np.max(depth))) if depth_range is None else map(float, depth_range)
+    if z1 <= z0:
+        raise ValueError("depth_range: the bottom must be deeper than the top")
+    n = max(int(np.ceil((z1 - z0) / dz - 1e-9)), 1)
+    dz_eff = (z1 - z0) / n
+    layerD = z0 + dz_eff * (np.arange(n) + 0.5)               # layer midpoints
+    layerA = np.interp(layerD, bthD, bthA)
+    if extrapolate:                                           # depth_range beyond the data
+        layerC = C.interp(depth=np.clip(layerD, float(C.depth.min()), float(C.depth.max())))
+        layerC = layerC.assign_coords(depth=layerD)
+    else:
+        layerC = C.interp(depth=layerD)                       # NaN outside the data
+
+    weights = xr.DataArray(layerA * dz_eff, coords={"depth": layerD}, dims="depth")
+    M = (layerC * weights).sum("depth", skipna=False)
+    if mean:
+        out = M / weights.sum()
+    elif per_area:
+        A0 = float(np.interp(z0, bthD, bthA)) if A_ref is None else float(A_ref)
+        if A0 <= 0:
+            raise ValueError("reference area must be > 0 (check the bathymetry or A_ref)")
+        out = M / A0
+    else:
+        out = M
+    if out.size == 1:
+        out = out.values.item()
+    return out
+
+
 def seiche_period_1(depth, Zt, Lt, delta_rho, AvHyp_rho, g= 9.81) :
     '''
     Estimation of the Seiche periode based on: G. Monismith, 1985; Münnich, Wüest, & Imboden, 1992.
