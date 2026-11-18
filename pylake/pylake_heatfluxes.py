@@ -153,21 +153,55 @@ def shortwave_radiation(date, SRad, cloud_cover, lat):
     Qsw = SRad * (Fdir * (1. - albedo_dir) + Fdiff * (1. - albedo_diff))
     return Qsw
 
-def longwave_in(Ta, RH, C):
-    # Absorbed atmospheric long-wave radiation, following Fink et al.
-    # Sign convention: positive = heat flux INTO the lake (this term is
-    # always a gain, so it is always >= 0) - matches shortwave_radiation's
-    # Qsw and longwave_out's sign convention below.
-    # Ta air temperature [degC], RH relative humidity [%], C cloud cover [0-1]
+def longwave_in(Ta, RH, C, method="fink"):
+    """
+    Absorbed atmospheric long-wave radiation (W m-2).
+
+    Sign convention: positive = heat flux INTO the lake (this term is always a gain, so it is always
+    >= 0) - matches shortwave_radiation's Qsw and longwave_out's sign convention below.
+
+    Parameters
+    ----------
+    Ta : float or array_like
+        Air temperature (degC)
+    RH : float or array_like
+        Relative humidity (%)
+    C : float or array_like
+        Cloud cover (0-1)
+    method : {"fink", "dilley_crawford"}, default: "fink"
+        "fink": Fink et al. (2014), Brutsaert-type clear-sky emissivity 1.24 (ea/Ta)^(1/7) with the cloud
+        factor (1 + 0.17 C^2) and the lake-specific factor a = 1.0592.
+        "dilley_crawford": clear-sky radiation of Dilley and O'Brien (1998) with the cloud correction of
+        Crawford and Duchon (1999), emissivity = (1 - C) eps_clear + C, as used in Simstrat
+        (see Flerchinger et al. 2009 for an evaluation). Its cloud correction is stronger under overcast
+        skies than (1 + 0.17 C^2).
+
+    Returns
+    -------
+    Qlw_in : float or np.ndarray
+        Absorbed atmospheric long-wave radiation (W m-2), i.e. 97 % of the incoming radiation
+        (long-wave albedo of the water surface 0.03)
+    """
     sigma = 5.67e-8  # Stefan-Boltzmann constant, W m-2 K-4
     AL = 0.03        # long-wave surface albedo
-    a = 1.0592       # empirical (lake-specific) correction factor of the atmospheric emissivity
-    Cc = 0.17
-
+    Ta = np.asarray(Ta, dtype=float)
+    TK = Ta + 273.15
     es = saturation_vapour_pressure(Ta)
-    ea = RH * es / 100.
-    Ea = a * (1 + Cc * C ** 2) * 1.24 * (ea / (Ta + 273.15)) ** (1 / 7.)  # atmospheric emissivity
-    Qlw_in = (1 - AL) * Ea * sigma * (Ta + 273.15) ** 4
+    ea = RH * es / 100.  # vapour pressure (hPa)
+
+    if method == "fink":
+        a = 1.0592       # empirical (lake-specific) correction factor of the atmospheric emissivity
+        Cc = 0.17
+        Ea = a * (1 + Cc * C ** 2) * 1.24 * (ea / TK) ** (1 / 7.)  # atmospheric emissivity
+    elif method == "dilley_crawford":
+        # Dilley and O'Brien (1998): clear-sky radiation (W m-2) from the precipitable water w = 46.5 ea/T (cm,
+        # ea in hPa), L_clear = 59.38 + 113.7 (T/273.16)^6 + 96.96 sqrt(w/2.5)
+        L_clear = 59.38 + 113.7 * (TK / 273.16) ** 6 + 96.96 * np.sqrt(46.5 * ea / TK / 2.5)
+        Ea = (1 - C) * L_clear / (sigma * TK ** 4) + C  # Crawford and Duchon (1999)
+    else:
+        raise ValueError('method must be "fink" or "dilley_crawford"')
+
+    Qlw_in = (1 - AL) * Ea * sigma * TK ** 4
     return Qlw_in
 
 def longwave_out(Tw):
