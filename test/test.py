@@ -39,3 +39,12 @@ assert abs(pylake.content(np.full(8, 2.0), bthA=bthA, bthD=[0, 2.3, 2.5, 4.2, 5.
 oxy_gap = oxy.astype(float); oxy_gap[-1] = np.nan
 assert np.isnan(pylake.content(oxy_gap, bthA=bthA, bthD=bthD, depth=depth))
 assert np.isfinite(pylake.content(oxy_gap, bthA=bthA, bthD=bthD, depth=depth, extrapolate=True))
+
+# altitude_correction: from altitude (mean pressure) or from a measured pressure
+assert abs(pylake.altitude_correction(0) - 1) < 1e-9
+assert abs(pylake.altitude_correction(pressure_hPa=1013.25, T_C=20) - 1) < 1e-12
+p724 = pylake.barometric_pressure(724) / 100
+assert abs(pylake.altitude_correction(724) - pylake.altitude_correction(pressure_hPa=p724)) < 1e-12
+assert np.allclose(pylake.altitude_correction(pressure_hPa=[950, 960], T_C=[20, 21]),
+                   [(950 - pylake.water_vapor_pressure(20) / 100) / (1013.25 - pylake.water_vapor_pressure(20) / 100),
+                    (960 - pylake.water_vapor_pressure(21) / 100) / (1013.25 - pylake.water_vapor_pressure(21) / 100)])
