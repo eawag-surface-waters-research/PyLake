@@ -48,3 +48,12 @@ assert abs(pylake.altitude_correction(724) - pylake.altitude_correction(pressure
 assert np.allclose(pylake.altitude_correction(pressure_hPa=[950, 960], T_C=[20, 21]),
                    [(950 - pylake.water_vapor_pressure(20) / 100) / (1013.25 - pylake.water_vapor_pressure(20) / 100),
                     (960 - pylake.water_vapor_pressure(21) / 100) / (1013.25 - pylake.water_vapor_pressure(21) / 100)])
+
+# longwave_in: default (Fink) unchanged, Dilley & O'Brien + Crawford & Duchon as in Simstrat
+Ta, RH = np.array([0., 10., 20.]), np.array([90., 70., 60.])
+assert np.allclose(pylake.longwave_in(Ta, RH, 0.5), pylake.longwave_in(Ta, RH, 0.5, method='fink'))
+lw_dc = pylake.longwave_in(Ta, RH, 0.5, method='dilley_crawford')
+ea = RH * pylake.saturation_vapour_pressure(Ta) / 100; TK = Ta + 273.15
+L_clear = 59.38 + 113.7 * (TK / 273.16) ** 6 + 96.96 * np.sqrt(465 * ea / TK * 0.04)   # as in Simstrat
+assert np.allclose(lw_dc, 0.97 * (0.5 * L_clear + 0.5 * 5.67e-8 * TK ** 4))
+assert np.allclose(pylake.longwave_in(Ta, RH, 1.0, method='dilley_crawford'), 0.97 * 5.67e-8 * TK ** 4)   # overcast: black body
