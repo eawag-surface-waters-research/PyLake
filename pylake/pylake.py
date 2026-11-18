@@ -1054,19 +1054,45 @@ def water_vapor_pressure(T_C):
     p_mmHg = 10 ** (8.10765 - 1750.286 / (235 + T_C))
     return p_mmHg * 133.322  # mmHg → Pa
 
-def altitude_correction(altitude_m, T_C=15):
+def altitude_correction(altitude_m=None, T_C=15, pressure_hPa=None):
     """
-    Altitude correction factor accounting for altitude and water vapor.
+    Correction factor for the oxygen solubility at the local air pressure, for water-saturated air.
+
+    The solubility from oxygen_solubility() refers to 1013.25 hPa. At the local air pressure P the oxygen
+    partial pressure of water-saturated air is lower, and the saturation concentration is
+        oxygen_solubility(T) * (P - e_w(T)) / (1013.25 hPa - e_w(T))
+    with the water vapour pressure e_w. The air pressure is either a measured value (pressure_hPa) or estimated
+    from the altitude (barometric_pressure(), mean pressure without weather variations).
+
+    Parameters
+    ----------
+    altitude_m : float or array_like, optional
+        Altitude above sea level (m). Used if pressure_hPa is not given.
+    T_C : float or array_like, default: 15
+        Temperature (degC) for the water vapour pressure.
+    pressure_hPa : float or array_like, optional
+        Measured absolute air pressure at the site (hPa), i.e. station pressure (QFE), not reduced to sea level.
+        Takes precedence over altitude_m.
 
     Returns
     -------
-    float
+    float or np.ndarray
         Dimensionless correction factor
+
+    Example
+    -------
+    >>> pylake.altitude_correction(724)                       # mean pressure at 724 m
+    >>> pylake.altitude_correction(pressure_hPa=955, T_C=21)  # measured pressure
     """
 
     P0 = 101325.0              # Pa, standard sea-level pressure
-    p_air = barometric_pressure(altitude_m)
-    p_vapor = water_vapor_pressure(T_C)
+    if pressure_hPa is not None:
+        p_air = np.asarray(pressure_hPa, dtype=float) * 100.0
+    elif altitude_m is not None:
+        p_air = barometric_pressure(altitude_m)
+    else:
+        raise ValueError("Either altitude_m or pressure_hPa must be given.")
+    p_vapor = water_vapor_pressure(np.asarray(T_C, dtype=float))
 
     return (p_air - p_vapor) / (P0 - p_vapor)
 
