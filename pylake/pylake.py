@@ -199,8 +199,11 @@ def robust_thermocline(Temp, depth=None, time=None, s=0.2, mixed_cutoff=1, min_g
     Thermocline depth is the centroid of the temperature decrease: every depth interval between two values of the
     profile is weighted by its temperature decrease, and the thermocline is the weighted mean depth of the interval
     midpoints. Intervals with a gradient below min_gradient times the strongest gradient of the profile are ignored,
-    so that the weak gradients of the hypolimnion do not pull the thermocline down. Temperature increases with depth
-    (inversions) get no weight.
+    so that the weak gradients of the hypolimnion do not pull the thermocline down.
+    The direction of the stratification is taken from the temperature difference between the shallowest and the
+    deepest value: with normal stratification (surface warmer) the temperature decreases are used, with inverse
+    stratification (surface colder, e.g. under ice) the temperature increases. Changes in the opposite direction
+    (small inversions) get no weight.
     In contrast to methods that pick one gradient peak, the result changes continuously with the profile: if the
     temperature decrease has two similar steps, the thermocline lies between them instead of jumping from one to
     the other. A thin surface layer with a small temperature decrease (e.g. daytime warming) has little weight.
@@ -244,7 +247,14 @@ def robust_thermocline(Temp, depth=None, time=None, s=0.2, mixed_cutoff=1, min_g
 
     T = Temp.values                                  # (time, depth)
     z = np.asarray(depth, dtype=float)
-    drop = np.clip(-np.diff(T, axis=1), 0, None)     # temperature decrease of each interval (degC)
+    # Direction of the stratification: +1 if the shallowest valid value is warmer than the deepest (normal
+    # stratification), -1 if it is colder (inverse stratification, e.g. under ice)
+    valid = ~np.isnan(T)
+    first = np.argmax(valid, axis=1)
+    last = T.shape[1] - 1 - np.argmax(valid[:, ::-1], axis=1)
+    rows = np.arange(T.shape[0])
+    direction = np.sign(T[rows, first] - T[rows, last])[:, None]
+    drop = np.clip(-direction * np.diff(T, axis=1), 0, None)   # temperature change of each interval in the direction of the stratification (degC)
     gradient = drop / np.diff(z)                      # (degC/m)
     z_mid = (z[1:] + z[:-1]) / 2
 
