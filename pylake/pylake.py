@@ -378,55 +378,82 @@ def metalimnion(Temp, depth=None, slope=0.25, slope_calc="relative", seasonal=Fa
         hypo_depth_filt = hypo_depth_filt.values.item()
     return epi_depth_filt, hypo_depth_filt
 
-def mixed_layer(Temp, depth=None, s=0.2, threshold=0.01):
+def mixed_layer(Temp, depth=None, s=0.2, threshold=None, *, method):
     '''
-    Calculates the mixed layer depth by using the density difference method.
-    The depth of the mixed layer is defined as the depth where the density difference with the density of the surface is greater than a threshold (default 0.01 kg/m3).
-    The algorithm does the difference of density from the surface to the bottom, reaching lower depth until it reaches a density difference lower than the threshold.
-    Surface density might have NaNs. If it's the case, we take a deeper sensor (not more than 1m)
+    Calculates the mixed layer depth by the difference method, based on density or temperature (method is required).
+    The depth of the mixed layer is the shallowest depth where the difference to the surface exceeds a threshold:
+    - method="density": density at depth minus surface density > threshold (kg/m3, default 0.01)
+    - method="temperature": absolute temperature difference to the surface > threshold (degC, default 0.02); the absolute value
+      also catches inverse (winter) stratification
+    The depth is interpolated linearly between the two depths around the threshold. If the threshold is never
+    exceeded, the deepest depth is returned.
+    A density threshold corresponds to very different temperature differences depending on the temperature
+    (0.001 kg/m3: ~0.005 degC at 20 degC, ~0.06 degC at 5 degC, infinite at 4 degC), a temperature threshold does not.
+    Surface values might be NaN. If it's the case, the second depth is used as surface reference.
 
     Parameters
     -----------
-    depth : array_like 
-        depth vector (m)
     Temp : array_like
         Temperature matrix (degrees)
+    depth : array_like
+        depth vector (m)
     s   : array_like
-        Salinity matrix (psu)
-    Threshold : scalar
-        threshold for the mixing layer detection
+        Salinity matrix (psu), only used for method="density"
+    threshold : scalar, optional
+        threshold for the mixed layer detection (kg/m3 for method="density", default 0.01;
+        degC for method="temperature", default 0.02)
+    method : str, required (keyword)
+        "density" or "temperature"
 
     Returns
     -----------
     hML array_like
         Mixed layer depth (m)
-    
+
     Example
     ----------
     >>>    temp = np.array([14.3,14,12.1,10,9.7,9.5,6,5])
     ...    depth = np.array([1,2,3,4,5,6,7,8])
-    ...    hML = pylake.mixed_layer(depth, wtr, threshold=0.1)
+    ...    hML = pylake.mixed_layer(temp, depth, threshold=0.5, method="temperature")
     ...    print(hML)
+    ...    2.1052631578947363
     '''
     Temp, depth = to_xarray(Temp, depth)
-    rho = water_density(Temp,s)
+    Temp = Temp.transpose('time', 'depth')
+    if method == "density":
+        var = water_density(Temp, s)
+        threshold = 0.01 if threshold is None else threshold
+    elif method == "temperature":
+        var = Temp.copy()
+        threshold = 0.02 if threshold is None else threshold
+    else:
+        raise ValueError('method must be "density" or "temperature"')
 
-    rho_surf = rho.isel(depth=0)
+    surf = var.isel(depth=0).copy()
 
     #If surface sensor is NaN, check the second (could potentially be iterated further down)
-    NaN = np.where(np.isnan(rho_surf))[0]
-    rho_surf[NaN] = rho.isel(time=NaN, depth=1)
-    
-    # First (shallowest) depth where the density difference to the surface exceeds the threshold.
-    # (The minimum of the positive excess is not used: with small density inversions it can be deeper.)
-    exceeds = (rho - rho_surf) > threshold
-    # Set mixing depth to deepest depth if the threshold is never exceeded
-    hML_idx = exceeds.argmax('depth').where(exceeds.any('depth'), len(rho.depth) - 1).astype(int)
+    NaN = np.where(np.isnan(surf))[0]
+    surf[NaN] = var.isel(time=NaN, depth=1)
 
-    # Get the depth corresponding to hML_idx
-    hML = rho.depth.isel(depth=hML_idx)
+    diff = var - surf
+    if method == "temperature":
+        diff = abs(diff)
+    # excess over the threshold; the mixed layer ends where it first (from the surface) becomes positive.
+    # (The minimum of the positive excess is not used: with small inversions it can be deeper.)
+    excess = (diff - threshold).values
+    z = np.asarray(var.depth.values, dtype=float)
+    exceeds = excess > 0
+    hML = np.full(excess.shape[0], z[-1])     # deepest depth if the threshold is never exceeded
+    for i in np.where(exceeds.any(axis=1))[0]:
+        j = np.argmax(exceeds[i])
+        if j == 0 or np.isnan(excess[i, j - 1]):
+            hML[i] = z[j]
+        else:
+            hML[i] = z[j - 1] + (-excess[i, j - 1]) / (excess[i, j] - excess[i, j - 1]) * (z[j] - z[j - 1])
+
+    hML = xr.DataArray(hML, coords={'time': var.time})
     if hML.size == 1:
-            hML = hML.values.item()
+        hML = hML.values.item()
     return hML
 
 def wedderburn(delta_rho, metaT, uSt, AvHyp_rho, Lo=False, Ao=False, g=9.81):

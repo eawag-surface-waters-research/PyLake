@@ -132,6 +132,23 @@ def weighted_method(depths, rho, z_idx):
         pass
     return weighted_thermoD
 
+def crossing_depth(depth, temp, value, z_top, z_bottom):
+    '''
+    Depth between z_top and z_bottom where temp first crosses value (from the top), linearly interpolated.
+    np.interp(-value, -temp, depth) is not used because it requires a monotonic profile; small
+    inversions anywhere in the profile give wrong results.
+    '''
+    z = np.concatenate(([z_top], depth[(depth > z_top) & (depth < z_bottom)], [z_bottom]))
+    T = np.interp(z, depth, temp)
+    d = T - value
+    if d[0] == 0:
+        return z[0]
+    k = np.where(np.sign(d[1:]) != np.sign(d[:-1]))[0]
+    if len(k) == 0:
+        return np.nan
+    j = k[0]
+    return z[j] + d[j] / (d[j] - d[j + 1]) * (z[j + 1] - z[j])
+
 def check_bathy(Temp, bthA, bthD, depth):
     #Check this with xarray
     numD = Temp.shape[1]-1

@@ -7,7 +7,16 @@ depth = np.array([1,2,3,4,5,6,7,8])
 thermoD, thermoInd = pylake.thermocline(Temp, depth)
 epilimnion, hypolimnion = pylake.metalimnion(Temp, depth)
 SthermoD, SthermoInd = pylake.seasonal_thermocline(Temp,depth)
-hML = pylake.mixed_layer(Temp,depth, threshold=0.4)
+hML = pylake.mixed_layer(Temp,depth, threshold=0.4, method="density")
+hML_T = pylake.mixed_layer(Temp, depth, threshold=0.5, method="temperature")
+assert abs(hML_T - (2 + 0.2 / 1.9)) < 1e-9          # first exceedance between 2 and 3 m, interpolated
+assert pylake.mixed_layer(np.full(8, 10.0), depth, method="temperature") == 8   # never exceeded -> deepest depth
+assert abs(pylake.mixed_layer(Temp, depth, method="temperature") - (1 + 0.02 / 0.3)) < 1e-9   # default 0.02 degC
+try:
+    pylake.mixed_layer(Temp, depth, threshold=0.4)
+    raise AssertionError("mixed_layer without method must fail")
+except TypeError:
+    pass
 n2 = pylake.buoyancy_freq(Temp, depth, g=9.81)
 avg_ep_T = pylake.Average_layer_temp(Temp, depth=depth, depth_ref=epilimnion, layer='top')
 avg_ep_rho = pylake.water_density(avg_ep_T)
