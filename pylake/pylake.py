@@ -529,7 +529,7 @@ def wedderburn(delta_rho, metaT, uSt, AvHyp_rho, Lo=False, Ao=False, g=9.81):
         if Ao_cond:
             Lo = 2 * np.sqrt(Ao/np.pi);      #Length at thermocline depth
         else:
-            warnings.warn("Please indicate either Lo or Ao")
+            raise ValueError("Please indicate either Lo or Ao")
 
     go = g*delta_rho/AvHyp_rho
     W = go*metaT**2/(uSt**2*Lo)
@@ -771,8 +771,8 @@ def seiche_period_1(depth, Zt, Lt, delta_rho, AvHyp_rho, g= 9.81) :
         depth (in m) of the Temp measurements
     Zt: array_like, scalar
         Thermocline depth 
-    At: scalar 
-        Surface at the thermocline depth 
+    Lt: scalar
+        Length of the lake at the thermocline depth (m)
     delta_rho: scalar, array_like
         Density difference between the epilimion and the hypolimnion 
     AvHyp_rho: array_like, scalar
@@ -794,15 +794,15 @@ def seiche_period_1(depth, Zt, Lt, delta_rho, AvHyp_rho, g= 9.81) :
     ...    Lt = 4000
     ...    delta_rho = 0.5
     ...    AvHyp_rho = 997
-    ...    lw.seiche_period_1(depth, Zt, Lt, delta_rho, AvHyp_rho, g= 9.81)
-    ...    1445418 
+    ...    pylake.seiche_period_1(depth, Zt, Lt, delta_rho, AvHyp_rho, g= 9.81)
+    ...    29.87
     '''
     g_reduced = g*delta_rho/AvHyp_rho
     Zd = depth[-1]
     h2 = Zd-Zt
     h1 = Zt
     T1 = 2*Lt*np.sqrt((h1+h2)/(g_reduced*h1*h2))
-    return T1*60*60
+    return T1/3600
 
 def Lake_number(bthA, bthD, ustar, St, metaT, metaB, averageHypoDense, g=9.81):
     '''
@@ -961,7 +961,7 @@ def Average_layer_temp(Temp, depth_ref, layer='top', depth=None):
     elif layer=='bot':
         mask = (Temp.depth>depth_ref)
     else:
-        warnings.warnings("Temperature average of the whole water column")
+        warnings.warn("Temperature average of the whole water column")
         mean_temp = Temp.mean(dim="depth")
         return mean_temp
     masked_temp = Temp.where(mask)
