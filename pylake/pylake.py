@@ -153,7 +153,7 @@ def seasonal_thermocline(Temp, depth=None, time=None, s=0.2, mixed_cutoff=1, Smi
     # It seems that this is not used...
     dRhoCut = Smin*np.ones(time.size)
 
-    thermoD, thermoInd = thermocline(Temp, depth, smooth=smooth, mixed_cutoff=mixed_cutoff)        
+    thermoD, thermoInd = thermocline(Temp, depth, s=s, smooth=smooth, mixed_cutoff=mixed_cutoff)
 
     def process_peaks(arr, Smin, thermoInd):
         #If no peak is found, set SthermoInd to thermoInd
@@ -332,9 +332,9 @@ def metalimnion(Temp, depth=None, slope=0.25, slope_calc="relative", seasonal=Fa
         Temp, depth = to_xarray(Temp, depth, time)
 
     if seasonal:
-        thermoD, thermoInd = seasonal_thermocline(Temp, depth, mixed_cutoff=mixed_cutoff, smooth=False, seasonal_smoothed=False)
+        thermoD, thermoInd = seasonal_thermocline(Temp, depth, s=s, mixed_cutoff=mixed_cutoff, smooth=False, seasonal_smoothed=False)
     else:
-        thermoD, thermoInd = thermocline(Temp, depth, mixed_cutoff=mixed_cutoff, smooth=False)
+        thermoD, thermoInd = thermocline(Temp, depth, s=s, mixed_cutoff=mixed_cutoff, smooth=False)
 
     #thermoD, thermoInd = list(map(np.asanyarray, (thermoD, thermoInd)))
     Temp["thermoInd"] = thermoInd
@@ -882,7 +882,7 @@ def Lake_number(bthA, bthD, ustar, St, metaT, metaB, averageHypoDense, g=9.81):
     Ln = g*St_uC*(metaT+metaB)/(2*averageHypoDense*ustar**2*A0**(3/2)*Zcv)
     return Ln 
 
-def buoyancy_freq(Temp, depth=None, g=9.81):
+def buoyancy_freq(Temp, depth=None, g=9.81, s=0.2):
     '''
     Description: Calculate the buoyancy frequency (Brunt-Vaisala frequency) for a temperature profile.
 
@@ -894,6 +894,8 @@ def buoyancy_freq(Temp, depth=None, g=9.81):
         a numeric vector corresponding to the depth (in m) of the Temp measurements
     g: scalar, default: 9.81
         gravity acceleration (m/s2)
+    s: scalar, array_like, default: 0.2
+        Salinity in Practical Salinity Scale units
     
     Returns
     ----------
@@ -913,7 +915,7 @@ def buoyancy_freq(Temp, depth=None, g=9.81):
         2.31752785e-04, 1.00430572e-04])
     '''
     Temp, depth = to_xarray(Temp,depth)
-    rho = water_density(Temp, 0.2)
+    rho = water_density(Temp, s)
     numdepth = len(depth)
     rho_2 = rho.isel(depth=slice(0,numdepth-1))
     drho_dz = rho.diff('depth')/Temp.depth.diff('depth')
