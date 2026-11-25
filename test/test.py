@@ -7,6 +7,9 @@ depth = np.array([1,2,3,4,5,6,7,8])
 thermoD, thermoInd = pylake.thermocline(Temp, depth)
 epilimnion, hypolimnion = pylake.metalimnion(Temp, depth)
 SthermoD, SthermoInd = pylake.seasonal_thermocline(Temp,depth)
+thermoR = pylake.robust_thermocline(Temp, depth)
+assert abs(thermoR - (1.9*2.5 + 2.1*3.5 + 3.5*6.5 + 1.0*7.5) / 8.5) < 1e-9   # centroid of the strong intervals
+assert np.isnan(pylake.robust_thermocline(np.full(8, 10.0), depth))           # mixed: below mixed_cutoff
 hML = pylake.mixed_layer(Temp,depth, threshold=0.4, method="density")
 hML_T = pylake.mixed_layer(Temp, depth, threshold=0.5, method="temperature")
 assert abs(hML_T - (2 + 0.2 / 1.9)) < 1e-9          # first exceedance between 2 and 3 m, interpolated

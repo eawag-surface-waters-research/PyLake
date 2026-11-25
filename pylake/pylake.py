@@ -188,16 +188,22 @@ def seasonal_thermocline(Temp, depth=None, time=None, s=0.2, mixed_cutoff=1, Smi
 
 
 
-def robust_thermocline(Temp, depth=None, time=None, s=0.2, mixed_cutoff=1):
+def robust_thermocline(Temp, depth=None, time=None, s=0.2, mixed_cutoff=1, min_gradient=0.25):
     '''
     Calculate the thermocline depth from one or various temperature profiles in a more robust way than gradient methods.
-    This is especially useful, if the depth resolution of the data is not very high.
+    This is especially useful, if the depth resolution of the data is not very high or if the temperature decrease
+    is spread over several steps.
 
     Method
     ----------
-    Thermocline depth is defined as the middle point between the upper and the lower bound of
-    the metalimnion. The middle point is calculated by taking the depth where temperature is
-    the average between the temperatures at the upper and lower bound of the metalimnion
+    Thermocline depth is the centroid of the temperature decrease: every depth interval between two values of the
+    profile is weighted by its temperature decrease, and the thermocline is the weighted mean depth of the interval
+    midpoints. Intervals with a gradient below min_gradient times the strongest gradient of the profile are ignored,
+    so that the weak gradients of the hypolimnion do not pull the thermocline down. Temperature increases with depth
+    (inversions) get no weight.
+    In contrast to methods that pick one gradient peak, the result changes continuously with the profile: if the
+    temperature decrease has two similar steps, the thermocline lies between them instead of jumping from one to
+    the other. A thin surface layer with a small temperature decrease (e.g. daytime warming) has little weight.
 
     Parameters
     ----------
@@ -206,10 +212,12 @@ def robust_thermocline(Temp, depth=None, time=None, s=0.2, mixed_cutoff=1):
     depth : array_like
         a numeric vector corresponding to the depth (in m) of the Temp
     s : array_like, default : 0.2
-        Salinity of the water column in PSU
+        Salinity of the water column in PSU (not used, the method is based on temperature; kept for compatibility)
     mixed_cutoff : scalar, default: 1
         The difference between the maximum and minimum of the
         temperature profile should be higher than this cutoff.
+    min_gradient : scalar, default: 0.25
+        Intervals with a temperature gradient below this fraction of the strongest gradient are ignored.
 
     Returns 
     ----------
@@ -219,11 +227,11 @@ def robust_thermocline(Temp, depth=None, time=None, s=0.2, mixed_cutoff=1):
     Examples
     ----------
     >>>     import pylake
-    ...     temp = temp = np.array([14.3,14,12.1,10,9.7,9.5,6,5])
-    ...     depth = depth = np.array([1,2,3,4,5,6,7,8])
+    ...     temp = np.array([14.3,14,12.1,10,9.7,9.5,6,5])
+    ...     depth = np.array([1,2,3,4,5,6,7,8])
     ...     thermo = pylake.robust_thermocline(temp,depth)
     ...     print(f"thermocline depth: {thermo}\n")
-    ...     thermocline depth: 6.50536441
+    ...     thermocline depth: 4.982352941176471
     '''
 
     Temp, depth = to_xarray(Temp, depth, time)
@@ -232,30 +240,22 @@ def robust_thermocline(Temp, depth=None, time=None, s=0.2, mixed_cutoff=1):
     Temp = Temp.transpose('time', 'depth')
 
     # Compute significance
-    is_not_significant = Temp.max('depth') - Temp.min('depth') < mixed_cutoff
+    is_not_significant = (Temp.max('depth') - Temp.min('depth') < mixed_cutoff).values
 
-    # Metalimnion boundaries
-    epi_depth, hypo_depth = metalimnion(Temp, depth, slope=0.5, slope_calc='relative',
-                                        seasonal=True, mixed_cutoff=mixed_cutoff, smooth=True, s=s)
+    T = Temp.values                                  # (time, depth)
+    z = np.asarray(depth, dtype=float)
+    drop = np.clip(-np.diff(T, axis=1), 0, None)     # temperature decrease of each interval (degC)
+    gradient = drop / np.diff(z)                      # (degC/m)
+    z_mid = (z[1:] + z[:-1]) / 2
 
-    # Force epi_depth and hypo_depth to 1D numpy arrays
-    epi_depth = np.atleast_1d(epi_depth)
-    hypo_depth = np.atleast_1d(hypo_depth)
-
-    # Initialize output
-    thermoD = np.full(epi_depth.shape[0], np.nan)
-
-    for i in range(epi_depth.shape[0]):
-        temp_profile = Temp.values[i, :]  # (depths)
-        if np.isnan(epi_depth[i]) or np.isnan(hypo_depth[i]):
-            continue
-        epi_temp = np.interp(epi_depth[i], depth, temp_profile)
-        hypo_temp = np.interp(hypo_depth[i], depth, temp_profile)
-        meta_temp = (epi_temp + hypo_temp) / 2
-        thermoD[i] = crossing_depth(depth, temp_profile, meta_temp, epi_depth[i], hypo_depth[i])
+    with np.errstate(invalid='ignore', divide='ignore'):
+        strong = gradient >= min_gradient * np.nanmax(gradient, axis=1, keepdims=True)
+        weight = np.where(strong, drop, 0)
+        weight = np.where(np.isnan(weight), 0, weight)
+        thermoD = (weight * z_mid).sum(axis=1) / weight.sum(axis=1)
 
     # Apply significance mask
-    thermoD = np.where(~is_not_significant.values, thermoD, np.nan)
+    thermoD = np.where(~is_not_significant, thermoD, np.nan)
 
     if thermoD.size == 1:
         thermoD = thermoD[0]
