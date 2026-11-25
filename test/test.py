@@ -15,6 +15,7 @@ hML = pylake.mixed_layer(Temp,depth, threshold=0.4, method="density")
 hML_T = pylake.mixed_layer(Temp, depth, threshold=0.5, method="temperature")
 assert abs(hML_T - (2 + 0.2 / 1.9)) < 1e-9          # first exceedance between 2 and 3 m, interpolated
 assert pylake.mixed_layer(np.full(8, 10.0), depth, method="temperature") == 8   # never exceeded -> deepest depth
+assert pylake.mixed_layer(np.array([13.52, 13.44, 13.42, 13.42, 13.40, 13.39, 13.41, 13.41]), depth, threshold=0.1, method="temperature") == 4.0   # differences of exactly 0.10 (13.52 - 13.42) do not exceed the threshold
 assert abs(pylake.mixed_layer(Temp, depth, method="temperature") - (1 + 0.02 / 0.3)) < 1e-9   # default 0.02 degC
 try:
     pylake.mixed_layer(Temp, depth, threshold=0.4)

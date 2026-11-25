@@ -396,7 +396,7 @@ def mixed_layer(Temp, depth=None, s=0.2, threshold=None, *, method):
     - method="temperature": absolute temperature difference to the surface > threshold (degC, default 0.02); the absolute value
       also catches inverse (winter) stratification
     The depth is interpolated linearly between the two depths around the threshold. If the threshold is never
-    exceeded, the deepest depth is returned.
+    exceeded, the deepest depth is returned. Differences equal to the threshold (within 1e-9) do not exceed it.
     A density threshold corresponds to very different temperature differences depending on the temperature
     (0.001 kg/m3: ~0.005 degC at 20 degC, ~0.06 degC at 5 degC, infinite at 4 degC), a temperature threshold does not.
     Surface values might be NaN. If it's the case, the second depth is used as surface reference.
@@ -451,6 +451,9 @@ def mixed_layer(Temp, depth=None, s=0.2, threshold=None, *, method):
     # excess over the threshold; the mixed layer ends where it first (from the surface) becomes positive.
     # (The minimum of the positive excess is not used: with small inversions it can be deeper.)
     excess = (diff - threshold).values
+    # Differences equal to the threshold up to floating-point noise (e.g. 13.52 - 13.42 for temperatures rounded to
+    # 0.01 degC) count as equal, i.e. not exceeding: otherwise the result depends on the last binary digit
+    excess = np.where(np.abs(excess) < 1e-9, 0.0, excess)
     z = np.asarray(var.depth.values, dtype=float)
     exceeds = excess > 0
     hML = np.full(excess.shape[0], z[-1])     # deepest depth if the threshold is never exceeded
