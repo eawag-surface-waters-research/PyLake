@@ -247,10 +247,12 @@ def robust_thermocline(Temp, depth=None, time=None, s=0.2, mixed_cutoff=1):
 
     for i in range(epi_depth.shape[0]):
         temp_profile = Temp.values[i, :]  # (depths)
+        if np.isnan(epi_depth[i]) or np.isnan(hypo_depth[i]):
+            continue
         epi_temp = np.interp(epi_depth[i], depth, temp_profile)
         hypo_temp = np.interp(hypo_depth[i], depth, temp_profile)
         meta_temp = (epi_temp + hypo_temp) / 2
-        thermoD[i] = np.interp(-meta_temp, -temp_profile, depth)
+        thermoD[i] = crossing_depth(depth, temp_profile, meta_temp, epi_depth[i], hypo_depth[i])
 
     # Apply significance mask
     thermoD = np.where(~is_not_significant.values, thermoD, np.nan)
@@ -415,18 +417,11 @@ def mixed_layer(Temp, depth=None, s=0.2, threshold=0.01):
     NaN = np.where(np.isnan(rho_surf))[0]
     rho_surf[NaN] = rho.isel(time=NaN, depth=1)
     
-    rho_diff = rho.T - rho_surf - threshold
-
-    # Set rho diff to 999 if not larger than a certain threshold
-    rho_diff_filled = rho_diff.where(rho_diff > 0, other=999)
-
-    # Find the index of the minimum value along the depth dimension (= depth first exceeds the threshold)
-    hML_idx = rho_diff_filled.argmin('depth')
-
-    # Set mixing depth to deepest depth if no valid density difference is discovered
-    for i in range(len(rho_diff_filled.isel(depth=hML_idx).values)):
-        if (rho_diff_filled.isel(depth=hML_idx).values[i] == 999):
-            hML_idx[i] = len(rho.depth) - 1
+    # First (shallowest) depth where the density difference to the surface exceeds the threshold.
+    # (The minimum of the positive excess is not used: with small density inversions it can be deeper.)
+    exceeds = (rho - rho_surf) > threshold
+    # Set mixing depth to deepest depth if the threshold is never exceeded
+    hML_idx = exceeds.argmax('depth').where(exceeds.any('depth'), len(rho.depth) - 1).astype(int)
 
     # Get the depth corresponding to hML_idx
     hML = rho.depth.isel(depth=hML_idx)
